@@ -138,6 +138,14 @@ function impact(applied) {
   if (!$('#taskForm').reportValidity()) return;
   const task = formTask(), current = {...editing};
   if (!task.name) { toast('Введите название задачи', true); return; }
+  const original = state.project.tasks.find(item => item.id === task.id);
+  const unchanged = original && task.name === original.name && task.duration === original.duration
+    && task.owner === original.owner && task.status === original.status
+    && [...task.dependencies].sort().join('\0') === [...original.dependencies].sort().join('\0');
+  if (!applied && unchanged) {
+    $('#taskPreview').innerHTML = `<div class="preview-empty">${icon('branches')}<h3>Изменений пока нет</h3><p>Длительность задачи — ${original.duration} дн., прогноз проекта — ${state.analysis.summary.project_duration} дн. Измените параметры задачи и снова нажмите «Оценить последствия».</p></div>`;
+    return;
+  }
   return taskOperation(async () => {
     const body = {task_id:task.id,changes:task,apply:applied};
     if (!current.existing) body.tasks = [...state.project.tasks, task];
