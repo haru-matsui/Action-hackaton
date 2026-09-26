@@ -7,5 +7,4 @@ COPY static ./static
 COPY data/db.json ./data/db.json
 ENV PORT=5000 DATA_DIR=/app/data PYTHONUNBUFFERED=1
 EXPOSE 5000
-VOLUME ["/app/data"]
 CMD ["flask", "--app", "app", "run", "--host", "0.0.0.0", "--port", "5000"]

@@ -5,6 +5,8 @@ __pycache__/
 .env
 .env.*
 **/ai.json
+docker-compose.override.yml
+/data/
 build/
 dist/
 tmp/

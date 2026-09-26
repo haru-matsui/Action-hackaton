@@ -1,16 +1,14 @@
-"""REST API планировщика проектов (Flask, только stdlib-зависимости + flask).
+"""REST API планировщика проектов на Flask.
 
-Хранение: JSON-файл backend/data/db.json (volume-совместимо с Docker).
+Начальные данные лежат в backend/data/db.json, изменяемые — в DATA_DIR.
 """
 from __future__ import annotations
 
 import json
 import os
 import shutil
-import sys
 import threading
 import time
-import webbrowser
 import uuid
 
 from flask import Flask, jsonify, request, send_from_directory
@@ -21,19 +19,12 @@ import ai_service
 from ai_context import project_facts, task_facts
 from schedule import analyze, diff_analysis, downstream_of, simulate
 
-def resource_path(relative: str) -> str:
-    """Path to bundled read-only resources (works in source and PyInstaller)."""
-    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, relative)
-
-
-# User data must live outside the one-file executable, otherwise it would be
-# lost when PyInstaller extracts the executable to a temporary directory.
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _default_data_root = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
 DATA_DIR = os.environ.get("DATA_DIR", os.path.join(_default_data_root, "PM-Radar", "data"))
 DB_FILE = os.path.join(DATA_DIR, "db.json")
-STATIC_DIR = resource_path("static")
-DEFAULT_DB_FILE = resource_path("data/db.json")
+STATIC_DIR = os.path.join(BASE_DIR, "static")
+DEFAULT_DB_FILE = os.path.join(BASE_DIR, "data", "db.json")
 
 app = Flask(__name__, static_folder=STATIC_DIR)
 _lock = threading.Lock()
@@ -567,9 +558,4 @@ def not_found(e):
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", "5000"))
-
-    # In the packaged Windows build open the UI automatically after startup.
-    if getattr(sys, "frozen", False):
-        threading.Timer(1.2, lambda: webbrowser.open(f"http://127.0.0.1:{port}")).start()
-
     app.run(host="127.0.0.1", port=port, threaded=True)
