@@ -1,0 +1,113 @@
+{
+  "projects": {
+    "demo-migration": {
+      "id": "demo-migration",
+      "name": "Запуск CRM-платформы",
+      "description": "Демонстрационный проект: разработка и вывод в продакшн CRM-платформы.",
+      "deadline": 30,
+      "tasks": [
+        {
+          "id": "analysis",
+          "name": "Анализ требований",
+          "duration": 5,
+          "owner": "Анна Смирнова",
+          "status": "done",
+          "dependencies": []
+        },
+        {
+          "id": "design_ui",
+          "name": "Дизайн интерфейса",
+          "duration": 6,
+          "owner": "Игорь Петров",
+          "status": "in_progress",
+          "dependencies": [
+            "analysis"
+          ]
+        },
+        {
+          "id": "design_db",
+          "name": "Проектирование БД",
+          "duration": 4,
+          "owner": "Олег Кузнецов",
+          "status": "done",
+          "dependencies": [
+            "analysis"
+          ]
+        },
+        {
+          "id": "backend",
+          "name": "Разработка backend",
+          "duration": 10,
+          "owner": "Олег Кузнецов",
+          "status": "todo",
+          "dependencies": [
+            "design_db",
+            "design_ui"
+          ]
+        },
+        {
+          "id": "frontend",
+          "name": "Разработка frontend",
+          "duration": 8,
+          "owner": "Мария Иванова",
+          "status": "todo",
+          "dependencies": [
+            "design_ui"
+          ]
+        },
+        {
+          "id": "integration",
+          "name": "Интеграция модулей",
+          "duration": 3,
+          "owner": "Олег Кузнецов",
+          "status": "todo",
+          "dependencies": [
+            "backend",
+            "frontend"
+          ]
+        },
+        {
+          "id": "testing",
+          "name": "Тестирование",
+          "duration": 5,
+          "owner": "Пётр Орлов",
+          "status": "todo",
+          "dependencies": [
+            "integration"
+          ]
+        },
+        {
+          "id": "fixes",
+          "name": "Исправление дефектов",
+          "duration": 3,
+          "owner": "Мария Иванова",
+          "status": "todo",
+          "dependencies": [
+            "testing"
+          ]
+        },
+        {
+          "id": "docs",
+          "name": "Документация",
+          "duration": 3,
+          "owner": "Анна Смирнова",
+          "status": "todo",
+          "dependencies": [
+            "analysis"
+          ]
+        },
+        {
+          "id": "deploy",
+          "name": "Деплой и приёмка",
+          "duration": 2,
+          "owner": "Пётр Орлов",
+          "status": "todo",
+          "dependencies": [
+            "fixes",
+            "docs"
+          ]
+        }
+      ]
+    }
+  }
+}
