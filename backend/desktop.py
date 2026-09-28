@@ -54,24 +54,24 @@ def run() -> None:
     window.title('PM Radar')
     window.geometry('400x184')
     window.resizable(False, False)
-    window.configure(bg='#f6f7fb')
+    window.configure(bg='#f4f4f2')
 
     title = tk.Label(window, text='PM Radar', font=('Segoe UI', 17, 'bold'),
-                     fg='#24283a', bg='#f6f7fb')
+                     fg='#242628', bg='#f4f4f2')
     title.pack(pady=(18, 2))
     tk.Label(window, text='Проект запущен на этом компьютере',
-             font=('Segoe UI', 10), fg='#697185', bg='#f6f7fb').pack()
+             font=('Segoe UI', 10), fg='#595e61', bg='#f4f4f2').pack()
 
     ai_state = tk.StringVar(value='Ключ ИИ задан' if ai_service.llm_available()
                             else 'ИИ: ключ не задан')
     tk.Label(window, textvariable=ai_state, font=('Segoe UI', 9),
-             fg='#775ec9', bg='#f6f7fb').pack(pady=(7, 12))
+             fg='#595e61', bg='#f4f4f2').pack(pady=(7, 12))
 
-    actions = tk.Frame(window, bg='#f6f7fb')
+    actions = tk.Frame(window, bg='#f4f4f2')
     actions.pack()
 
     tk.Button(actions, text='Открыть проект', command=lambda: webbrowser.open(url),
-              bg='#725bd8', fg='white', activebackground='#624ac5',
+              bg='#d52d16', fg='white', activebackground='#ba2915',
               activeforeground='white', relief='flat', font=('Segoe UI', 9, 'bold'),
               padx=10, pady=5, cursor='hand2').pack(side='left', padx=4)
 
@@ -95,7 +95,7 @@ def run() -> None:
                             parent=window)
 
     tk.Button(actions, text='Подключить ИИ', command=configure_ai,
-              bg='#ffffff', fg='#594b90', relief='solid', borderwidth=1,
+              bg='#ffffff', fg='#242628', relief='solid', borderwidth=1,
               font=('Segoe UI', 9), padx=9, pady=5, cursor='hand2').pack(side='left', padx=4)
 
     def close():

@@ -175,12 +175,12 @@ function renderGraph(state) {
   }
   const nodes = tasks.map(task => {
     const pos = positions[task.id], lines = wrapName(task.name);
-    return `<g class="graph-node ${task.is_critical ? 'critical' : ''} ${task.status}" transform="translate(${pos.x},${pos.y})" data-task-id="${esc(task.id)}" role="button" tabindex="0" aria-label="${esc(task.name)}"><title>${esc(task.name)} · ${esc(task.owner || 'Не назначен')}</title><rect width="${nodeWidth}" height="${nodeHeight}" rx="10"/><circle class="graph-status" cx="${nodeWidth-13}" cy="17" r="3"/>${lines.map((line, i) => `<text class="node-title" x="13" y="${lines.length === 1 ? 28 : 22 + i*15}">${esc(line)}</text>`).join('')}<text class="node-meta" x="13" y="59">${task.status === 'done' ? 'Выполнено' : `${task.duration} дн. · резерв ${task.slack} дн.`}</text></g>`;
+    return `<g class="graph-node ${task.is_critical ? 'critical' : ''} ${task.status}" transform="translate(${pos.x},${pos.y})" data-task-id="${esc(task.id)}" role="button" tabindex="0" aria-label="${esc(task.name)}"><title>${esc(task.name)} · ${esc(task.owner || 'Не назначен')}</title><rect width="${nodeWidth}" height="${nodeHeight}" rx="1"/><circle class="graph-status" cx="${nodeWidth-13}" cy="17" r="3"/>${lines.map((line, i) => `<text class="node-title" x="13" y="${lines.length === 1 ? 28 : 22 + i*15}">${esc(line)}</text>`).join('')}<text class="node-meta" x="13" y="59">${task.status === 'done' ? 'Выполнено' : `${task.duration} дн. · резерв ${task.slack} дн.`}</text></g>`;
   }).join('');
   svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
   svg.setAttribute('width', width);
   svg.setAttribute('height', height);
-  svg.innerHTML = `<defs><marker id="normalArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#d9dce8"/></marker><marker id="criticalArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10Z" fill="#baa9df"/></marker></defs>${edges}${nodes}`;
+  svg.innerHTML = `<defs><marker id="normalArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10Z" class="graph-arrow"/></marker><marker id="criticalArrow" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="5" markerHeight="5" orient="auto"><path d="M0 0L10 5L0 10Z" class="graph-arrow"/></marker></defs>${edges}${nodes}`;
 }
 
 function renderPath(state) {

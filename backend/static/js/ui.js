@@ -44,7 +44,7 @@ export function icon(name, extraClass = '') {
 export function hydrateIcons(root = document) {
   root.querySelectorAll('[data-icon]').forEach(node => { node.innerHTML = icon(node.dataset.icon); });
 }
-const palette = [['#eee9f6','#9b87b4'],['#e7f0ec','#7a9e8f'],['#f4ebdf','#b19a79'],['#e6ecf6','#8a9ebc'],['#f5e7ed','#b48f9e']];
+const palette = [['#edecea','#555b5d'],['#e5eee8','#386a55'],['#f3eadb','#80652e'],['#e5ebec','#49676c'],['#fae8e1','#924b34']];
 export function avatar(name) {
   const index = [...name].reduce((sum, char) => sum + char.charCodeAt(0), 0) % palette.length;
   const letters = name.trim().split(/\s+/).slice(0, 2).map(s => s[0]).join('').toUpperCase() || '—';

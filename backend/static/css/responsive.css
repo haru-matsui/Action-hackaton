@@ -1,0 +1,127 @@
+/* Shared responsive behavior */
+@media (min-width: 1700px) {
+:root { --sidebar-width: 236px; }
+  .workspace-grid { grid-template-columns: minmax(0,1fr) 332px; gap: 28px; }
+  .metric { min-height: 145px; padding: 18px 20px; }
+  .metric-title { font-size: 11px; }
+  .metric-value b { font-size: 34px; }
+  .gantt-row { min-height: 61px; }
+  .gantt-bar { top: 19px; }
+}
+@media (max-width: 1320px) {
+:root { --sidebar-width: 198px; }
+  .sidebar { padding-left: 13px; padding-right: 13px; }
+  main { padding: 25px 24px 0; }
+  .workspace-bar { padding: 0 24px; }
+  .workspace-grid { grid-template-columns: minmax(0,1fr) 278px; gap: 17px; }
+  .metrics { gap: 0; }
+  .metric { padding: 13px 12px; }
+  .metric-title { font-size: 11px; }
+  .metric-title .icon { display: none; }
+  .metric-value b { font-size: 27px; }
+  .metric-note { font-size: 11px; }
+  .team-avatars { display: none; }
+  .chart-toolbar { align-items: flex-start; }
+  .legend { max-width: 260px; gap: 7px 10px; }
+}
+@media (max-width: 1120px) {
+.workspace-grid { grid-template-columns: minmax(0,1fr); }
+  .assistant-panel { position: static; height: 550px; }
+  .assistant-header h2 { font-size: 15px; }
+  .message-body,.chat-form textarea { font-size: 12px; }
+  .quick-prompts button,.report-button { font-size: 11px; }
+  .radar-summary strong { font-size: 12px; }
+  .radar-summary p { font-size: 11px; }
+  .metrics { grid-template-columns: repeat(4,minmax(0,1fr)); }
+  .metric-title { font-size: 11px; }
+  .metric-note { font-size: 11px; }
+  .legend { max-width: none; }
+}
+@media (max-width: 800px) {
+.sidebar { transform: translateX(-100%); transition: transform .2s ease; width: 230px; }
+  .sidebar.open { transform: translateX(0); }
+  .nav-backdrop { display: block; position: fixed; inset: 0; border: 0; background: #20222477; backdrop-filter: blur(3px); z-index: 35; }
+  .page-shell { margin-left: 0; }
+  .workspace-bar .mobile-menu { display: inline-flex; margin-left: -7px; }
+  .workspace-bar { padding: 0 20px; height: 60px; }
+  .breadcrumb { gap: 9px; }
+  main { padding: 24px 20px 0; }
+  .project-heading { gap: 16px; margin-bottom: 23px; }
+  h1 { font-size: 27px; }
+  .project-heading-actions .button { padding: 10px 12px; }
+  .metrics { gap: 0; }
+  .metric { min-height: 131px; }
+  .metric-value b { font-size: 28px; }
+  .task-dialog-grid { grid-template-columns: 1fr; }
+  .task-preview { border-left: 0; border-top: 1px solid var(--border); padding: 20px 24px; }
+  .preview-empty { padding: 13px 15px; text-align: left; }
+  .preview-empty > .icon { display: none; }
+}
+@media (max-width: 550px) {
+.workspace-bar { padding: 0 15px; }
+  .breadcrumb > [data-icon],.breadcrumb > .icon,.save-state { display: none; }
+  .breadcrumb { font-size: 11px; }
+  .workspace-tools { gap: 0; }
+  main { padding: 22px 15px 0; }
+  .project-heading { align-items: flex-start; flex-direction: column; gap: 17px; }
+  h1 { font-size: 26px; }
+  .project-title-block > p { max-width: 350px; font-size: 11px; }
+  .project-heading-actions { width: 100%; justify-content: space-between; }
+  .team-avatars { display: flex; }
+  .metrics { grid-template-columns: repeat(2,minmax(0,1fr)); gap: 0; }
+  .metric { padding: 15px; }
+  .metric-title { font-size: 11px; }
+  .metric-title .icon { display: block; }
+  .metric-note { font-size: 11px; }
+  .attention-banner { padding: 12px; align-items: flex-start; }
+  .attention-banner .text-button { font-size: 0; margin-top: 2px; padding: 0; }
+  .attention-banner .text-button .icon { width: 17px; height: 17px; }
+  .planning-title { padding: 19px 16px 17px; }
+  .unit-label { display: none; }
+  .view-tabs { padding: 0 12px 14px; gap: 0; }
+  .view-tab { font-size: 11px; gap: 5px; padding: 8px; }
+  .view-tab .icon { width: 13px; height: 13px; }
+  .chart-toolbar { padding: 13px 16px; align-items: center; gap: 8px; }
+  .legend { max-width: 178px; font-size: 11px; gap: 5px 10px; }
+  .sandbox-toggle { font-size: 11px; gap: 4px; }
+  .sandbox-toggle > .icon { display: none; }
+  #timeline { --meta-width: 185px; min-width: 645px; }
+  .gantt-meta { padding-left: 15px; padding-right: 10px; gap: 7px; }
+  .gantt-axis-label { padding-left: 15px; }
+  .gantt-task-info { min-width: 0; }
+  .gantt-owner { font-size: 11px; }
+  .task-name { font-size: 11px; }
+  .gantt-row { min-height: 53px; }
+  .chart-footer { padding: 12px 16px; font-size: 11px; align-items: flex-start; }
+  .path-card,.result-card { padding: 18px 16px; }
+  .section-heading h2 { font-size: 15px; }
+  .section-heading { gap: 10px; }
+  .path-duration { font-size: 11px; }
+  .assistant-panel { height: 580px; }
+  .assistant-header { padding: 19px 17px; }
+  .assistant-header h2 { font-size: 14px; }
+  .dialog-header { padding: 20px; }
+  .dialog-header h2 { font-size: 19px; }
+  .task-form-fields { padding: 20px; }
+  .field-row { gap: 10px; }
+  .dependency-list { grid-template-columns: 1fr; }
+  .dialog-footer { padding: 15px 20px; flex-wrap: wrap; }
+  .dialog-footer-actions { width: 100%; display: grid; grid-template-columns: 1fr 1fr; }
+  .dialog-footer-actions .button.primary { grid-column: 1 / -1; }
+  .dialog-body { padding: 20px; }
+  .task-assistant-actions { gap: 10px; }
+  .confirm-dialog { padding: 22px; }
+  .confirm-dialog .dialog-footer { padding: 20px 0 0; }
+}
+@media (prefers-reduced-motion: reduce) {
+*,*::before,*::after { animation: none !important; transition: none !important; scroll-behavior: auto !important; }
+}
+@media (max-width: 560px) {
+#datesForm .field-row,#projectForm .field-row { grid-template-columns: 1fr; }
+}
+@media (max-width: 550px) {
+  .metric:nth-child(2) { border-right: 0; }
+  .metric:nth-child(-n+2) { border-bottom: 1px solid var(--border); }
+  .project-heading-actions { padding-top: 0; }
+  .project-calendar .text-button { border-left: 0; padding-left: 0; }
+}
