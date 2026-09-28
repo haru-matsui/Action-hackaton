@@ -5,16 +5,42 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location -LiteralPath $projectRoot
 
 try {
-    if (-not (Get-Command docker -ErrorAction SilentlyContinue)) {
-        throw 'Docker is not installed. Install and start Docker Desktop first.'
+    $dockerCommand = (Get-Command docker -ErrorAction SilentlyContinue).Source
+    if (-not $dockerCommand) {
+        $dockerCandidate = Join-Path $env:ProgramFiles 'Docker\Docker\resources\bin\docker.exe'
+        if (Test-Path -LiteralPath $dockerCandidate) {
+            $dockerCommand = $dockerCandidate
+        } else {
+            throw 'Docker Desktop is not installed. Install it once, then run this file again.'
+        }
     }
 
-    & docker info --format '{{.ServerVersion}}' *> $null
+    & $dockerCommand info --format '{{.ServerVersion}}' *> $null
     if ($LASTEXITCODE -ne 0) {
-        throw 'Docker Engine is not ready. Start Docker Desktop and try again.'
+        $desktopPath = Join-Path $env:ProgramFiles 'Docker\Docker\Docker Desktop.exe'
+        if (-not (Test-Path -LiteralPath $desktopPath)) {
+            throw 'Docker Engine is not ready and Docker Desktop was not found. Open Docker Desktop and try again.'
+        }
+        if (-not (Get-Process -Name 'Docker Desktop' -ErrorAction SilentlyContinue)) {
+            Write-Host 'Starting Docker Desktop...'
+            Start-Process -FilePath $desktopPath -WindowStyle Hidden
+        }
+        Write-Host 'Waiting for Docker Engine...'
+        $engineReady = $false
+        for ($attempt = 0; $attempt -lt 60; $attempt++) {
+            Start-Sleep -Seconds 2
+            & $dockerCommand info --format '{{.ServerVersion}}' *> $null
+            if ($LASTEXITCODE -eq 0) {
+                $engineReady = $true
+                break
+            }
+        }
+        if (-not $engineReady) {
+            throw 'Docker Engine did not start. Open Docker Desktop once to complete its setup, then try again.'
+        }
     }
 
-    & docker compose version *> $null
+    & $dockerCommand compose version *> $null
     if ($LASTEXITCODE -ne 0) {
         throw 'Docker Compose v2 is required. Update Docker Desktop.'
     }
@@ -27,7 +53,7 @@ try {
         }
     }
 
-    & docker compose up -d --build
+    & $dockerCommand compose up -d --build
     if ($LASTEXITCODE -ne 0) {
         throw 'The container could not start. Check the Docker output above.'
     }
