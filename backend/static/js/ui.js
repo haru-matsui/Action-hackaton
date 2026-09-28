@@ -4,6 +4,9 @@ export const $$ = selector => [...document.querySelectorAll(selector)];
 export const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, char => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[char]));
 
 const paths = {
+  users: '<circle cx="9" cy="7" r="3"/><path d="M3 21v-2a6 6 0 0 1 12 0v2M16 4a3 3 0 0 1 0 6M21 21v-2a6 6 0 0 0-4-5.7"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8ZM14 2v6h6M8 13h8M8 17h5"/>',
+  link: '<path d="m10 13 4-4M8 16l-1 1a4 4 0 0 1-6-6l4-4a4 4 0 0 1 6 0M16 8l1-1a4 4 0 0 1 6 6l-4 4a4 4 0 0 1-6 0" transform="translate(0 -1)"/>',
   radar: '<circle cx="12" cy="12" r="9"/><circle cx="12" cy="12" r="5"/><path d="m12 12 7-7"/><circle cx="12" cy="12" r="1"/>',
   folder: '<path d="M3 7V5a1 1 0 0 1 1-1h5l2 3h9a1 1 0 0 1 1 1v11a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1Z"/>',
   plus: '<path d="M12 5v14M5 12h14"/>',
@@ -91,9 +94,8 @@ export const statusNames = {todo:'К выполнению', in_progress:'В ра
 export const statusPill = status => `<span class="status-pill ${escapeHTML(status)}">${statusNames[status] || 'К выполнению'}</span>`;
 export const signed = number => `${number > 0 ? '+' : ''}${number}`;
 export function aiNotice(data) {
-  if (!data?.ai) return '';
-  const ai = data.ai;
-  return `<div class="ai-notice ${ai.source === 'llm' ? 'connected' : ''}">${icon(ai.source === 'llm' ? 'sparkles' : 'shield')}<span>${escapeHTML(ai.source === 'llm' ? `DeepSeek V4.1 Flash · OpenRouter${ai.cached ? ' · сохранённый ответ' : ''}` : ai.source === 'pending' ? 'DeepSeek готовит объяснение…' : ai.message || 'Резервный ответ расчётного движка')}</span></div>`;
+  if (!data?.ai || data.ai.source === 'llm' || data.ai.source === 'pending') return '';
+  return `<div class="ai-notice">${icon('alert')}<span>ИИ временно недоступен. Показана сводка по данным проекта.</span></div>`;
 }
 export function plural(number, one, few, many) {
   const last = Math.abs(number) % 100;

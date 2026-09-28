@@ -23,39 +23,37 @@
       </div>
       <button class="new-project" id="btnNew"><span data-icon="plus"></span>Создать проект</button>
       <div class="sidebar-divider"></div>
-      <div class="workspace-label">ПРОЕКТ</div>
-      <nav class="main-nav">
-        <button class="nav-item active" data-view="timeline" aria-current="page"><span data-icon="layout"></span><span>Обзор проекта</span></button>
-        <button class="nav-item" data-view="table"><span data-icon="list"></span><span>Все задачи</span><span class="nav-count" id="navTaskCount">—</span></button>
-        <button class="nav-item" data-view="graph"><span data-icon="branches"></span><span>Зависимости</span></button>
-        <button class="nav-item" data-action="focus-assistant"><span data-icon="sparkles"></span><span>Ассистент</span><span class="nav-ai">AI</span></button>
+      <div class="workspace-label">ИНСТРУМЕНТЫ</div>
+      <nav class="main-nav" aria-label="Другие разделы">
+        <button class="nav-item nav-placeholder" disabled><span data-icon="users"></span><span>Команда</span></button>
+        <button class="nav-item nav-placeholder" disabled><span data-icon="file"></span><span>Файлы</span></button>
+        <button class="nav-item nav-placeholder" disabled><span data-icon="link"></span><span>Интеграции</span></button>
       </nav>
       <div class="sidebar-progress">
-        <div class="sidebar-progress-title"><span>Прогресс проекта</span><strong id="sidePercent">0%</strong></div>
+        <div class="sidebar-progress-title"><span>Выполнено задач</span><strong id="sidePercent">0%</strong></div>
         <div class="progress-track"><span id="sideProgress"></span></div>
         <p id="sideProgressText">Загружаем задачи…</p>
       </div>
-      <div class="sidebar-bottom"><span class="local-mark" data-icon="shield"></span><div><strong>Ваше пространство</strong><span>Данные на этом устройстве</span></div></div>
     </aside>
 
     <div class="page-shell">
       <header class="workspace-bar">
         <div class="breadcrumb"><button class="icon-button mobile-menu" id="menuToggle" aria-controls="sidebar" aria-expanded="false" aria-label="Открыть навигацию"><span data-icon="menu"></span></button><span data-icon="folder"></span><span>Мои проекты</span><span class="breadcrumb-divider">/</span><strong id="breadcrumbView">Обзор проекта</strong></div>
-        <div class="workspace-tools"><span class="save-state" id="saveState"><i></i>Подключение…</span><details class="project-menu" id="projectMenu"><summary class="icon-button" aria-label="Действия с проектом" title="Действия с проектом"><span data-icon="more"></span></summary><div class="menu-popover"><button id="btnReset"><span data-icon="reset"></span>Восстановить демо</button><button id="btnDelProject" class="text-danger"><span data-icon="trash"></span>Удалить проект</button></div></details></div>
+        <div class="workspace-tools"><button class="button secondary assistant-toggle" id="btnAssistant" aria-expanded="false" aria-controls="assistantPanel"><span data-icon="sparkles"></span>Ассистент</button><span class="save-state" id="saveState"><i></i>Подключение…</span><details class="project-menu" id="projectMenu"><summary class="icon-button" aria-label="Действия с проектом" title="Действия с проектом"><span data-icon="more"></span></summary><div class="menu-popover"><button id="btnReset"><span data-icon="reset"></span>Восстановить демо</button><button id="btnDelProject" class="text-danger"><span data-icon="trash"></span>Удалить проект</button></div></details></div>
       </header>
 
       <main id="mainContent">
         <section class="project-heading">
-          <div class="project-title-block"><div class="project-kicker"><span class="kicker-line"></span>ПРОСТРАНСТВО ПРОЕКТА</div><h1 id="projectTitle">Ваш проект</h1><p id="projectDescription">Загружаем план, чтобы вы могли сосредоточиться на главном.</p></div>
+          <div class="project-title-block"><div class="project-kicker"><span class="kicker-line"></span><span id="planScope">СОХРАНЁННЫЙ ПЛАН</span></div><h1 id="projectTitle">Ваш проект</h1><p id="projectDescription">Загружаем план</p><div id="projectCalendar" class="project-calendar" hidden><div id="calendarSummary"></div><button class="text-button" id="btnProjectDates" type="button"><span data-icon="calendar"></span><span id="calendarAction">Указать даты</span></button></div></div>
           <div class="project-heading-actions"><div class="team-avatars" id="teamAvatars" aria-label="Команда проекта"></div><button class="button primary" id="btnAddTask"><span data-icon="plus"></span>Добавить задачу</button></div>
         </section>
 
-        <div class="workspace-grid">
+        <div class="workspace-grid assistant-collapsed">
           <div class="project-area">
             <section class="metrics" id="badges" aria-label="Показатели проекта" aria-busy="true"><div class="metric skeleton"></div><div class="metric skeleton"></div><div class="metric skeleton"></div><div class="metric skeleton"></div></section>
             <div class="attention-banner" id="projectAlert" hidden></div>
             <section class="planning-card surface" aria-label="План проекта">
-              <div class="planning-title"><div><h2>План проекта <span class="count-badge" id="taskCount">0</span></h2><p>Каждая задача — часть общей картины.</p></div><span class="unit-label"><span data-icon="calendar"></span>Рабочие дни</span></div>
+              <div class="planning-title"><h2>План проекта <span class="count-badge" id="taskCount">0</span></h2><span id="planUnits" class="unit-label"><span data-icon="calendar"></span>Рабочие дни</span></div>
               <div class="view-tabs" role="tablist" aria-label="Представление проекта">
                 <button id="tab-timeline" class="view-tab active" role="tab" aria-selected="true" aria-controls="timelineView" data-view="timeline"><span data-icon="timeline"></span>Линия времени</button>
                 <button id="tab-table" class="view-tab" role="tab" aria-selected="false" aria-controls="tableView" tabindex="-1" data-view="table"><span data-icon="list"></span>Таблица задач</button>
@@ -64,27 +62,25 @@
               <div id="timelineView" role="tabpanel" aria-labelledby="tab-timeline" data-view-panel="timeline">
                 <div class="chart-toolbar"><div class="legend"><span><i class="legend-critical"></i>Критический путь</span><span><i class="legend-done"></i>Выполнено</span><span><i class="legend-risk"></i>Под угрозой</span></div><button id="btnSandbox" class="sandbox-toggle" aria-pressed="false"><span data-icon="flask"></span>Песочница<span class="toggle-track"><i></i></span></button></div>
                 <div class="timeline-scroll" id="timelineScroll"><div id="timeline"></div></div>
-                <div class="chart-footer"><span data-icon="mouse"></span><span id="tlHint">Нажмите на задачу, чтобы увидеть детали и изменить план.</span></div>
+                <div class="chart-footer"><span data-icon="mouse"></span><span id="tlHint">Нажмите на задачу, чтобы увидеть детали и изменить план.</span><span id="baselineLegend" class="baseline-legend" hidden>Пунктир — сохранённый план</span></div>
               </div>
               <div id="tableView" role="tabpanel" aria-labelledby="tab-table" data-view-panel="table" hidden><div class="table-scroll"><table id="taskTable" aria-label="Задачи проекта"></table></div></div>
-              <div id="graphView" role="tabpanel" aria-labelledby="tab-graph" data-view-panel="graph" hidden><div class="graph-caption"><span><i class="legend-critical"></i>Критический путь</span><span>Нажмите на узел для редактирования</span></div><div id="graphWrap"><svg id="graph" role="group" aria-label="Граф зависимостей задач"></svg></div></div>
+              <div id="graphView" role="tabpanel" aria-labelledby="tab-graph" data-view-panel="graph" hidden><div class="graph-caption"><span><i class="legend-critical"></i>Критический путь</span><span id="graphHint">Нажмите на узел для редактирования</span></div><div id="graphWrap"><svg id="graph" role="group" aria-label="Граф зависимостей задач"></svg></div></div>
             </section>
-
-            <section class="surface result-card" id="sandboxCard" hidden><div class="section-heading"><div><span class="eyebrow">ПЕСОЧНИЦА</span><h2>Что изменится в проекте</h2></div><span class="status-pill violet">Не сохранено</span></div><div id="sandboxInfo"></div><div class="result-actions"><button class="button primary" id="sbApply">Применить изменение<span data-icon="arrowRight"></span></button><button class="button secondary" id="sbReset">Сбросить</button></div></section>
 
             <section class="surface result-card" id="impactCard" hidden><div class="section-heading"><div><span class="eyebrow">ИЗМЕНЕНИЕ ПРИМЕНЕНО</span><h2>Последствия для проекта</h2></div><button class="icon-button" data-action="close-impact" aria-label="Скрыть последствия"><span data-icon="x"></span></button></div><div id="impact"></div></section>
 
-            <section class="surface path-card"><div class="section-heading"><div><h2><span class="heading-icon" data-icon="route"></span>Критический путь</h2><p>Эти задачи определяют срок завершения проекта.</p></div><span class="path-duration" id="pathDuration"></span></div><div class="critical-path" id="criticalPath"></div></section>
+            <section class="surface path-card"><div class="section-heading"><div><h2><span class="heading-icon" data-icon="route"></span><span id="criticalTitle">Критический путь</span></h2><p id="criticalHint">Эти задачи определяют срок завершения проекта.</p></div><span class="path-duration" id="pathDuration"></span></div><div class="critical-path" id="criticalPath"></div></section>
           </div>
 
-          <aside class="assistant-panel surface" id="assistantPanel" aria-label="Ассистент проекта">
-            <div class="assistant-header"><span class="assistant-symbol" data-icon="sparkles"></span><div><h2>Ассистент проекта</h2><p id="aiStatus">Проверяю подключение ИИ…</p></div><span class="ai-label" id="aiBadge">…</span></div>
+          <aside class="assistant-panel surface" id="assistantPanel" aria-label="Ассистент проекта" hidden>
+            <div class="assistant-header"><span class="assistant-symbol" data-icon="sparkles"></span><h2 id="assistantTitle">Ассистент проекта</h2><button id="btnCloseAssistant" class="icon-button" aria-label="Свернуть ассистента"><span data-icon="x"></span></button></div>
+            <section id="sandboxCard" class="sandbox-panel" aria-label="Песочница" hidden><div class="sandbox-panel-heading"><span class="status-pill violet">Не сохранено</span><button id="sbExit" class="text-button">Выйти</button></div><div id="sandboxInfo" class="sandbox-content" aria-live="polite"></div><div class="sandbox-actions"><button id="sbRetry" class="text-button" hidden>Повторить объяснение</button><button id="sbReload" class="button secondary" hidden>Обновить проект</button><button class="button primary" id="sbApply" disabled>Применить сценарий</button><button class="button secondary" id="sbReset" disabled>Сбросить изменения</button></div></section>
             <div class="radar-summary" id="radarSummary"><span class="radar-orbit" data-icon="radar"></span><div><strong>Проверяю план проекта</strong><p>Ищу риски и узкие места</p></div></div>
             <div id="messages" class="messages" role="log" aria-live="polite" aria-label="Переписка с ассистентом"></div>
             <div class="assistant-compose"><div class="quick-label">С ЧЕГО НАЧНЁМ?</div><div class="quick-prompts" id="qchips"></div><form id="chatForm" class="chat-form"><textarea id="chatInput" rows="2" placeholder="Что будет, если…" aria-label="Вопрос ассистенту" required></textarea><div class="compose-footer"><span>Enter — отправить</span><button id="btnSend" class="send-button" aria-label="Отправить сообщение" type="submit"><span data-icon="arrowUp"></span></button></div></form><button class="report-button" id="btnReport"><span data-icon="download"></span>Отчёт для руководства<span data-icon="arrowUpRight"></span></button></div>
           </aside>
         </div>
-        <footer class="page-footer"><span>PM Radar</span><span>Ясный план. Обдуманные решения.</span></footer>
       </main>
     </div>
   </div>
@@ -95,7 +91,7 @@
       <div class="task-dialog-grid">
         <div class="task-form-fields">
           <label class="field">Название задачи<input id="fName" placeholder="Что нужно сделать?" maxlength="200" required></label>
-          <div class="field-row"><label class="field">Длительность, рабочих дней<input id="fDur" type="number" min="0" max="100000" step="1" required></label><label class="field">Статус<select id="fStatus"><option value="todo">К выполнению</option><option value="in_progress">В работе</option><option value="done">Выполнено</option></select></label></div>
+          <div class="field-row"><label class="field"><span id="fDurLabel">Оценка, рабочих дней</span><input id="fDur" type="number" min="0" max="100000" step="1" required></label><label class="field">Статус<select id="fStatus"><option value="todo">К выполнению</option><option value="in_progress">В работе</option><option value="done">Выполнено</option></select></label></div>
           <label class="field">Ответственный<input id="fOwner" list="ownerList" placeholder="Имя и фамилия" maxlength="120"><datalist id="ownerList"></datalist></label>
           <fieldset class="dependency-field"><legend>Начать после завершения</legend><div class="dependency-list" id="fDeps"></div></fieldset>
           <div class="task-assistant-actions"><button type="button" class="button soft" id="tmChecklist"><span data-icon="sparkles"></span>Разбить на подзадачи</button><button type="button" class="text-button" id="tmExplain">Объяснить задачу<span data-icon="arrowUpRight"></span></button></div>
@@ -107,7 +103,9 @@
     </form>
   </dialog>
 
-  <dialog id="projModal" class="project-dialog" aria-labelledby="pmTitle"><form id="projectForm"><div class="dialog-header"><div><span class="eyebrow">НОВОЕ НАЧАЛО</span><h2 id="pmTitle">Создать проект</h2></div><button type="button" class="icon-button" data-close="projModal" aria-label="Закрыть"><span data-icon="x"></span></button></div><div class="dialog-body"><p class="dialog-intro">Задайте ориентиры. Задачи и зависимости добавите следующим шагом.</p><label class="field">Название проекта<input id="pName" placeholder="Например, запуск нового продукта" maxlength="200" required></label><label class="field">Описание <span class="optional">необязательно</span><textarea id="pDesc" rows="3" placeholder="Какого результата вы хотите достичь?"></textarea></label><label class="field">Дедлайн, рабочих дней<input id="pDeadline" type="number" min="1" max="100000" step="1" placeholder="30"><span class="field-hint">Оставьте пустым, если срок ещё не определён.</span></label></div><div class="dialog-footer"><button type="button" class="button secondary" data-close="projModal">Отмена</button><button class="button primary" id="pmCreate" type="submit">Создать проект<span data-icon="arrowRight"></span></button></div></form></dialog>
+  <dialog id="projModal" class="project-dialog" aria-labelledby="pmTitle"><form id="projectForm"><div class="dialog-header"><div><span class="eyebrow">НОВОЕ НАЧАЛО</span><h2 id="pmTitle">Создать проект</h2></div><button type="button" class="icon-button" data-close="projModal" aria-label="Закрыть"><span data-icon="x"></span></button></div><div class="dialog-body"><p class="dialog-intro">Задайте ориентиры. Задачи и зависимости добавите следующим шагом.</p><label class="field">Название проекта<input id="pName" placeholder="Например, запуск нового продукта" maxlength="200" required></label><label class="field">Описание <span class="optional">необязательно</span><textarea id="pDesc" rows="3" placeholder="Какого результата вы хотите достичь?"></textarea></label><div class="field-row"><label class="field">Начало проекта<span class="date-input"><input id="pStart" type="text" inputmode="numeric" autocomplete="off" placeholder="ДД.ММ.ГГГГ" aria-label="Начало проекта" required><button id="pStartOpen" type="button" class="icon-button date-picker-button" aria-label="Начало проекта: выбрать в календаре" title="Выбрать в календаре"><span data-icon="calendar"></span></button><input id="pStartPicker" class="date-picker-native" form="calendar-picker" type="hidden" min="2000-01-01" max="2100-12-31"></span></label><label class="field"><span>Дедлайн <span class="optional">необязательно</span></span><span class="date-input"><input id="pDeadline" type="text" inputmode="numeric" autocomplete="off" placeholder="ДД.ММ.ГГГГ" aria-label="Дедлайн"><button id="pDeadlineOpen" type="button" class="icon-button date-picker-button" aria-label="Дедлайн: выбрать в календаре" title="Выбрать в календаре"><span data-icon="calendar"></span></button><input id="pDeadlinePicker" class="date-picker-native" form="calendar-picker" type="hidden" min="2000-01-01" max="2100-12-31"></span></label></div><p class="field-hint">Рабочая неделя — пн–пт, без учёта праздников. Дедлайн — до конца выбранного дня.</p></div><div class="dialog-footer"><button type="button" class="button secondary" data-close="projModal">Отмена</button><button class="button primary" id="pmCreate" type="submit">Создать проект<span data-icon="arrowRight"></span></button></div></form></dialog>
+
+  <dialog id="datesModal" class="project-dialog" aria-labelledby="datesTitle"><form id="datesForm"><div class="dialog-header"><h2 id="datesTitle">Даты проекта</h2><button type="button" class="icon-button" data-close="datesModal" aria-label="Закрыть"><span data-icon="x"></span></button></div><div class="dialog-body"><div class="field-row"><label class="field">Начало проекта<span class="date-input"><input id="dStart" type="text" inputmode="numeric" autocomplete="off" placeholder="ДД.ММ.ГГГГ" aria-label="Начало проекта" required><button id="dStartOpen" type="button" class="icon-button date-picker-button" aria-label="Начало проекта: выбрать в календаре" title="Выбрать в календаре"><span data-icon="calendar"></span></button><input id="dStartPicker" class="date-picker-native" form="calendar-picker" type="hidden" min="2000-01-01" max="2100-12-31"></span></label><label class="field"><span>Дедлайн <span class="optional">необязательно</span></span><span class="date-input"><input id="dDeadline" type="text" inputmode="numeric" autocomplete="off" placeholder="ДД.ММ.ГГГГ" aria-label="Дедлайн"><button id="dDeadlineOpen" type="button" class="icon-button date-picker-button" aria-label="Дедлайн: выбрать в календаре" title="Выбрать в календаре"><span data-icon="calendar"></span></button><input id="dDeadlinePicker" class="date-picker-native" form="calendar-picker" type="hidden" min="2000-01-01" max="2100-12-31"></span></label></div><p class="field-hint">Рабочая неделя — пн–пт, без учёта праздников. Дедлайн — до конца выбранного дня.</p><p class="field-hint">Сроки задач отсчитываются от даты начала. Её изменение сдвигает план. Дедлайн меняется отдельно.</p></div><div class="dialog-footer"><button type="button" class="button secondary" data-close="datesModal">Отмена</button><button class="button primary" id="datesSave" type="submit">Сохранить даты</button></div></form></dialog>
 
   <dialog id="explainModal" class="explain-dialog" aria-labelledby="exTitle"><div class="dialog-header"><div><span class="eyebrow">ПОЯСНЕНИЕ АССИСТЕНТА</span><h2 id="exTitle">Как задача влияет на проект</h2></div><button class="icon-button" data-close="explainModal" aria-label="Закрыть"><span data-icon="x"></span></button></div><div class="dialog-body prose" id="exText"></div></dialog>
 

@@ -9,5 +9,6 @@ services:
       - ./data:/app/data
     environment:
       PORT: "5000"
+      PM_RADAR_TIMEZONE: ${PM_RADAR_TIMEZONE:-Asia/Yekaterinburg}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
     restart: unless-stopped

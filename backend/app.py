@@ -10,14 +10,19 @@ import shutil
 import threading
 import time
 import uuid
+from collections import OrderedDict
 
 from flask import Flask, jsonify, request, send_from_directory
+from werkzeug.exceptions import BadRequest
 
 import assistant
 import ai_features
 import ai_service
+import sandbox
 from ai_context import project_facts, task_facts
-from schedule import analyze, diff_analysis, downstream_of, simulate
+from schedule import diff_analysis, downstream_of, simulate
+from validation import object_value, list_value, text_value, integer, boolean, dependencies
+from planning_calendar import analyze_project, set_dates, calendar_info
 
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 _default_data_root = os.environ.get("LOCALAPPDATA") or os.path.expanduser("~")
@@ -28,6 +33,25 @@ DEFAULT_DB_FILE = os.path.join(BASE_DIR, "data", "db.json")
 
 app = Flask(__name__, static_folder=STATIC_DIR)
 _lock = threading.Lock()
+# Short-lived server snapshots: clients can request prose, never supply its facts.
+_impact_receipts = OrderedDict()
+_receipt_lock = threading.Lock()
+IMPACT_TTL = 600
+IMPACT_LIMIT = 128
+
+
+def remember_impact(pid, revision, facts, explanation):
+    token = uuid.uuid4().hex
+    with _receipt_lock:
+        now = time.monotonic()
+        for key in list(_impact_receipts):
+            if now - _impact_receipts[key]['created'] > IMPACT_TTL:
+                del _impact_receipts[key]
+        _impact_receipts[token] = dict(pid=pid, revision=revision, facts=facts,
+                                       explanation=explanation, created=now)
+        while len(_impact_receipts) > IMPACT_LIMIT:
+            _impact_receipts.popitem(last=False)
+    return token
 
 
 # --------------------------------------------------------------------------- #
@@ -65,8 +89,10 @@ def demo_project() -> dict:
     return {
         "id": "demo-migration",
         "name": "Запуск CRM-платформы",
-        "description": "Демонстрационный проект: разработка и вывод в продакшн CRM-платформы.",
-        "deadline": 30,  # рабочих дней от старта
+        "description": "Разработка и запуск CRM-платформы.",
+        "deadline": None,
+        "start_date": "2026-09-22",
+        "deadline_date": "2026-11-03",
         "tasks": tasks,
     }
 
@@ -102,35 +128,76 @@ def save_db(db: dict) -> None:
 # --------------------------------------------------------------------------- #
 
 VALID_STATUS = {"todo", "in_progress", "done"}
+TASK_FIELDS = {'id', 'name', 'duration', 'start_delay', 'owner', 'status', 'dependencies'}
+
+
+def read_body(*allowed):
+    body = object_value(request.get_json(force=True), 'Запрос', allowed or None)
+    if 'base_revision' in body:
+        text_value(body['base_revision'], 'Версия проекта', 128, empty=False)
+    return body
+
+
+def days(value, label='Срок', minimum=0):
+    return integer(value, label, minimum)
+
+
+def deadline_value(value):
+    return None if value in (None, '') else days(value, 'Дедлайн', 1)
+
+
+def check_revision(body, project):
+    if body.get('base_revision') and body['base_revision'] != sandbox.revision(project):
+        return jsonify({'error': 'Проект изменился. Обновите страницу перед сохранением.',
+                        'code': 'revision_conflict'}), 409
+
+
+@app.errorhandler(ValueError)
+def invalid_input(error):
+    return jsonify({'error': str(error)}), 400
+
+
+@app.errorhandler(BadRequest)
+def invalid_json(error):
+    return jsonify({'error': 'Некорректный JSON. Проверьте данные запроса.'}), 400
 
 
 def norm_tasks(tasks: list[dict]) -> list[dict]:
     out = []
-    for t in tasks:
-        tid = t.get("id") or uuid.uuid4().hex[:8]
+    for t in list_value(tasks, 'Задачи'):
+        object_value(t, 'Задача', TASK_FIELDS)
+        tid = text_value(t['id'], 'Идентификатор задачи', 128, empty=False) if 'id' in t else uuid.uuid4().hex[:8]
         status = t.get("status", "todo")
-        if status not in VALID_STATUS:
-            status = "todo"
+        if not isinstance(status, str) or status not in VALID_STATUS:
+            raise ValueError('Неизвестный статус задачи.')
+        name = text_value(t.get('name', ''), 'Название задачи', empty=False)
         out.append({
             "id": str(tid),
-            "name": str(t.get("name", "Без названия")).strip() or "Без названия",
-            "duration": max(0, int(t.get("duration", 1))),
-            "start_delay": max(0, int(t.get("start_delay", 0))),
-            "owner": str(t.get("owner", "")).strip(),
+            "name": name,
+            "duration": days(t.get("duration", 1), 'Длительность'),
+            "start_delay": days(t.get("start_delay", 0), 'Ожидание'),
+            "owner": text_value(t.get("owner", ""), 'Ответственный', 120),
             "status": status,
-            "dependencies": [str(d) for d in t.get("dependencies", [])],
+            "dependencies": dependencies(t.get('dependencies', [])),
         })
     ids = {t["id"] for t in out}
+    if len(ids) != len(out):
+        raise ValueError('Идентификаторы задач не должны повторяться.')
     for t in out:
-        t["dependencies"] = [d for d in t["dependencies"] if d in ids and d != t["id"]]
+        if t['id'] in t['dependencies']:
+            raise ValueError('Задача не может зависеть от самой себя.')
+        if any(d not in ids for d in t['dependencies']):
+            raise ValueError('Одна из задач в зависимостях не найдена. Обновите план.')
+        t['dependencies'] = list(dict.fromkeys(t['dependencies']))
     return out
 
 
 def project_payload(project: dict) -> dict:
     """Проект + полный анализ (для основного представления)."""
-    analysis = analyze(project["tasks"], project.get("deadline"))
+    analysis = analyze_project(project)
     owners = sorted({t["owner"] for t in project["tasks"] if t["owner"]})
-    return {"project": project, "analysis": analysis, "owners": owners}
+    return {"project": project, "analysis": analysis, "owners": owners,
+            "revision": sandbox.revision(project)}
 
 
 # --------------------------------------------------------------------------- #
@@ -140,6 +207,11 @@ def project_payload(project: dict) -> dict:
 @app.get("/api/health")
 def health():
     return jsonify({"ok": True})
+
+
+@app.get('/api/calendar')
+def calendar_settings():
+    return jsonify(calendar_info())
 
 
 @app.get("/api/projects")
@@ -156,22 +228,24 @@ def list_projects():
 
 @app.post("/api/projects")
 def create_project():
-    body = request.get_json(force=True) or {}
-    name = str(body.get("name", "")).strip() or "Новый проект"
+    body = read_body('name', 'description', 'deadline', 'tasks', 'start_date', 'deadline_date')
+    name = text_value(body.get("name", "Новый проект"), 'Название проекта', empty=False)
     deadline = body.get("deadline")
     pid = uuid.uuid4().hex[:8]
     project = {
         "id": pid,
         "name": name,
-        "description": str(body.get("description", "")),
-        "deadline": int(deadline) if deadline not in (None, "", 0) else None,
+        "description": text_value(body.get("description", ""), 'Описание', 4000),
+        "deadline": deadline_value(deadline),
         "tasks": norm_tasks(body.get("tasks", [])),
     }
+    set_dates(project, body)
+    payload = project_payload(project)
     with _lock:
         db = load_db()
         db["projects"][pid] = project
         save_db(db)
-    return jsonify(project_payload(project)), 201
+    return jsonify(payload), 201
 
 
 @app.get("/api/projects/<pid>")
@@ -189,19 +263,25 @@ def get_project(pid: str):
 
 @app.put("/api/projects/<pid>")
 def update_project(pid: str):
-    body = request.get_json(force=True) or {}
+    body = read_body('name', 'description', 'deadline', 'tasks', 'base_revision', 'start_date', 'deadline_date')
     with _lock:
         db = load_db()
         project = db["projects"].get(pid)
         if not project:
             return jsonify({"error": "Проект не найден"}), 404
+        conflict = check_revision(body, project)
+        if conflict:
+            return conflict
         if "name" in body:
-            project["name"] = str(body["name"]).strip() or project["name"]
+            project["name"] = text_value(body['name'], 'Название проекта', empty=False)
         if "description" in body:
-            project["description"] = str(body["description"])
+            project["description"] = text_value(body['description'], 'Описание', 4000)
         if "deadline" in body:
+            if project.get('start_date'):
+                raise ValueError('Для этого проекта укажите календарный дедлайн.')
             d = body["deadline"]
-            project["deadline"] = int(d) if d not in (None, "", 0) else None
+            project["deadline"] = deadline_value(d)
+        set_dates(project, body)
         if "tasks" in body:
             project["tasks"] = norm_tasks(body["tasks"])
         try:
@@ -247,18 +327,25 @@ def impact(pid: str):
       duration_delta (+/- дн.), owner, status, dependencies, name.
       apply=true — изменения сохраняются в проекте; иначе это «предпросмотр».
     """
-    body = request.get_json(force=True) or {}
-    task_id = str(body.get("task_id", ""))
-    changes = body.get("changes", {})
-    apply_it = bool(body.get("apply", False))
+    body = read_body('task_id', 'changes', 'apply', 'tasks', 'base_revision')
+    task_id = text_value(body.get('task_id'), 'Задача', 128, empty=False)
+    changes = object_value(body.get('changes', {}), 'Изменение задачи', TASK_FIELDS | {'duration_delta'})
+    if 'id' in changes and changes['id'] != task_id:
+        raise ValueError('Идентификатор изменяемой задачи не совпадает.')
+    if 'duration' in changes and 'duration_delta' in changes:
+        raise ValueError('Укажите длительность или её изменение, но не оба значения.')
+    apply_it = boolean(body.get('apply', False), 'Сохранение')
     with _lock:
         db = load_db()
         project = db["projects"].get(pid)
         if not project:
             return jsonify({"error": "Проект не найден"}), 404
 
-    before = analyze(project["tasks"], project.get("deadline"))
-    base_tasks = norm_tasks(body["tasks"]) if isinstance(body.get("tasks"), list) \
+    conflict = check_revision(body, project)
+    if conflict:
+        return conflict
+    before = analyze_project(project)
+    base_tasks = norm_tasks(body["tasks"]) if 'tasks' in body \
         else project["tasks"]
     sim = [dict(t) for t in base_tasks]
     target = next((t for t in sim if t["id"] == task_id), None)
@@ -266,54 +353,88 @@ def impact(pid: str):
         return jsonify({"error": "Задача не найдена"}), 404
 
     if "name" in changes:
-        target["name"] = str(changes["name"]).strip() or target["name"]
+        target["name"] = text_value(changes['name'], 'Название задачи', empty=False)
     if "owner" in changes:
-        target["owner"] = str(changes["owner"]).strip()
-    if "status" in changes and changes["status"] in VALID_STATUS:
-        target["status"] = changes["status"]
+        target["owner"] = text_value(changes['owner'], 'Ответственный', 120)
+    if "status" in changes:
+        status = changes['status']
+        if not isinstance(status, str) or status not in VALID_STATUS:
+            raise ValueError('Неизвестный статус задачи.')
+        target["status"] = status
     if "dependencies" in changes:
-        target["dependencies"] = [str(d) for d in changes["dependencies"]]
+        target['dependencies'] = dependencies(changes['dependencies'])
     if "duration" in changes:
-        target["duration"] = max(0, int(changes["duration"]))
+        target["duration"] = days(changes["duration"], "Длительность")
     elif "duration_delta" in changes:
-        target["duration"] = max(0, int(target["duration"]) + int(changes["duration_delta"]))
+        delta = integer(changes['duration_delta'], 'Изменение длительности', -100000)
+        target['duration'] = days(target['duration'] + delta, 'Итоговая длительность')
     if "start_delay" in changes:
-        target["start_delay"] = max(0, int(changes["start_delay"]))
+        target["start_delay"] = days(changes["start_delay"], "Ожидание")
 
+    sim = norm_tasks(sim)
     try:
-        after = analyze(sim, project.get("deadline"))
+        after = analyze_project(project, sim, before["calendar"]["today"])
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
 
     diff = diff_analysis(before, after)
     diff["downstream"] = downstream_of(base_tasks, task_id)
     explanation = assistant.explain_change(before, after, diff, target["name"])
-    narration = ai_service.generate(project_facts(project, after, 'impact', before=before,
-        diff=diff, changed_task=target, saved=apply_it),
-        'Объясни последствия изменения и предложи действия.', explanation)
-
     if apply_it:
         updated = {**project, "tasks": norm_tasks(sim)}
         with _lock:
             db = load_db()
+            if sandbox.revision(db['projects'].get(pid)) != sandbox.revision(project):
+                return jsonify({'error': 'Проект изменился. Обновите план и повторите изменение.',
+                                'code': 'revision_conflict'}), 409
             db["projects"][pid] = updated
             save_db(db)
-        after = analyze(updated["tasks"], updated.get("deadline"))
+    result_revision = sandbox.revision(updated if apply_it else project)
+    facts = project_facts(project, after, 'impact', before=before,
+                          diff=diff, changed_task=target, saved=apply_it)
+    explanation_id = remember_impact(pid, result_revision, facts, explanation)
 
     return jsonify({
         "before": before,
         "after": after,
         "diff": diff,
-        "explanation": narration['text'], "llm": narration['llm'], "ai": narration['ai'],
+        "explanation": explanation, "llm": False, "ai": {"source": "pending"},
+        "explanation_id": explanation_id, "result_revision": result_revision,
         "applied": apply_it,
     })
+
+
+@app.post('/api/projects/<pid>/impact/explanation')
+def impact_explanation(pid):
+    body = read_body('explanation_id')
+    token = body.get('explanation_id')
+    if not isinstance(token, str) or not token:
+        raise ValueError('Укажите результат оценки изменений.')
+    with _receipt_lock:
+        receipt = _impact_receipts.get(token)
+        if not receipt or receipt['pid'] != pid or time.monotonic() - receipt['created'] > IMPACT_TTL:
+            return jsonify({'error': 'Оценка устарела. Оцените последствия ещё раз.'}), 410
+    with _lock:
+        current = load_db()['projects'].get(pid)
+    if sandbox.revision(current) != receipt['revision']:
+        return jsonify({'error': 'Проект изменился. Оцените последствия ещё раз.',
+                        'code': 'revision_conflict'}), 409
+    narration = ai_service.generate(receipt['facts'],
+        'Объясни последствия изменения и предложи действия.', receipt['explanation'])
+    with _lock:
+        current = load_db()['projects'].get(pid)
+    if sandbox.revision(current) != receipt['revision']:
+        return jsonify({'error': 'Проект изменился во время анализа. Обновите план.',
+                        'code': 'revision_conflict'}), 409
+    return jsonify(explanation=narration['text'], llm=narration['llm'], ai=narration['ai'],
+                   explanation_id=token, result_revision=receipt['revision'])
 
 
 @app.post("/api/projects/<pid>/assistant")
 def assistant_chat(pid: str):
     """Контр-фича: чат с ИИ-ассистентом руководителя проектов."""
-    body = request.get_json(force=True) or {}
-    message = str(body.get("message", "")).strip()
+    body = read_body('message')
+    message = text_value(body.get('message', ''), 'Вопрос', 4000, empty=False)
     if not message:
         return jsonify({"error": "Пустой запрос"}), 400
     with _lock:
@@ -322,11 +443,13 @@ def assistant_chat(pid: str):
     if not project:
         return jsonify({"error": "Проект не найден"}), 404
     try:
-        analysis = analyze(project["tasks"], project.get("deadline"))
+        analysis = analyze_project(project)
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
 
     answer, facts = assistant.chat(message, project, analysis)
+    if facts.get('type') in {'unsupported_scenario', 'insufficient_data', 'unchanged'}:
+        return jsonify({'reply': answer, 'facts': facts, 'llm': False})
     narration = ai_service.generate(project_facts(project, analysis, 'chat',
         question_result=facts, calculated_answer=answer), message, answer)
     return jsonify({"reply": narration['text'], "facts": facts,
@@ -336,17 +459,18 @@ def assistant_chat(pid: str):
 @app.post("/api/projects/<pid>/simulate")
 def simulate_endpoint(pid: str):
     """What-if без сохранения: {"changes": {task_id: {"duration": +N}}}."""
-    body = request.get_json(force=True) or {}
+    body = read_body('changes')
     changes = body.get("changes", {})
     with _lock:
         db = load_db()
         project = db["projects"].get(pid)
     if not project:
         return jsonify({"error": "Проект не найден"}), 404
-    before = analyze(project["tasks"], project.get("deadline"))
+    before = analyze_project(project)
     sim = simulate(project["tasks"], changes)
     try:
-        after = analyze(sim, project.get("deadline"))
+        sim = norm_tasks(sim)
+        after = analyze_project(project, sim, before["calendar"]["today"])
     except ValueError as e:
         return jsonify({"error": str(e)}), 409
     diff = diff_analysis(before, after)
@@ -376,7 +500,7 @@ def radar_endpoint(pid: str):
         project = load_db()["projects"].get(pid)
     if not project:
         return jsonify({"error": "Проект не найден"}), 404
-    analysis = analyze(project["tasks"], project.get("deadline"))
+    analysis = analyze_project(project)
     signals = ai_features.radar(analysis)
     narration = ai_service.generate(project_facts(project, analysis, 'radar'),
         'Кратко предупреди о самых важных рисках и предложи действия.', ai_features.radar_text(signals))
@@ -385,82 +509,95 @@ def radar_endpoint(pid: str):
 
 @app.post("/api/projects/<pid>/sandbox")
 def sandbox_endpoint(pid: str):
-    """Режим «Песочница»: пользователь перетащил задачу на timeline, ничего не
-    сохраняя. Считаем последствия виртуального сдвига и отдаём сухой JSON-факт:
-    {"task","shift","affected","deadline_shift","risk"} + текстовое объяснение."""
-    body = request.get_json(force=True) or {}
-    task_id = str(body.get("task_id", ""))
-    shift = int(body.get("shift_days", 0))
+    """Calculate first; interpret the same revision only after the user pauses."""
+    body = read_body('shifts', 'task_id', 'shift_days', 'base_revision', 'explain')
+    explain = boolean(body.get('explain', True), 'Пояснение')
+    if 'shifts' in body and ('task_id' in body or 'shift_days' in body):
+        raise ValueError('Укажите один формат сценария.')
     with _lock:
         project = load_db()["projects"].get(pid)
     if not project:
         return jsonify({"error": "Проект не найден"}), 404
-    if not any(t["id"] == task_id for t in project["tasks"]):
-        return jsonify({"error": "Задача не найдена"}), 404
-    before = analyze(project["tasks"], project.get("deadline"))
-    original = next(t for t in project['tasks'] if t['id'] == task_id)
-    if original['status'] == 'done':
-        return jsonify({'error': 'Выполненную задачу нельзя сдвигать в песочнице'}), 400
-    if int(original.get('start_delay', 0)) + shift < 0:
-        return jsonify({'error': 'Задача не может стартовать раньше завершения предшественников'}), 400
-    sim = simulate(project["tasks"], {task_id: {"start_delay": shift}})
-    after = analyze(sim, project.get("deadline"))
-    diff = diff_analysis(before, after)
-    fact = ai_features.sandbox_json(before, after, diff, task_id, shift)
-    text = _sandbox_text(fact)
-    if body.get('explain') is False:
-        return jsonify({'fact': fact, 'explanation': text, 'llm': False,
-            'ai': {'source': 'pending'}, 'after_summary': after['summary']})
-    narration = ai_service.generate(project_facts(project, after, 'sandbox', fact=fact,
-        before_summary=before['summary'], diff=diff, saved=False),
-        'Объясни последствия сдвига начала задачи. Длительность не менялась.', text)
-    return jsonify({"fact": fact, "explanation": narration['text'],
-                    "llm": narration['llm'], "ai": narration['ai'],
-                    "after_summary": after["summary"]})
+    if body.get('base_revision') and body['base_revision'] != sandbox.revision(project):
+        return jsonify({'error': 'Проект изменился. Обновите план перед новым сценарием.',
+                        'code': 'revision_conflict'}), 409
+    shifts = body['shifts'] if 'shifts' in body else {
+        text_value(body.get('task_id'), 'Задача', 128, empty=False): body.get('shift_days', 0)}
+    try:
+        result = sandbox.calculate(project, shifts)
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    text = sandbox.describe(result)
+    # Preserve the original single-task API while the UI uses a whole scenario.
+    if len(result['changes']) == 1:
+        result['fact'] = result['changes'][0]
+    if not explain or not result['shifts']:
+        return jsonify({**result, 'explanation': text, 'llm': False,
+                        'ai': {'source': 'pending' if result['shifts'] else 'unchanged'}})
+    narration = ai_service.generate(project_facts(project, result['after'], 'sandbox',
+        changes=result['changes'], before_summary=result['before']['summary'],
+        diff=result['diff'], saved=False),
+        'Объясни весь сценарий: какие задачи сдвинутся, как изменится прогноз и что можно сделать. '
+        'Длительности и согласованный дедлайн не менялись.', text)
+    with _lock:
+        current = load_db()['projects'].get(pid)
+    if sandbox.revision(current) != result['base_revision']:
+        return jsonify({'error': 'Проект изменился во время анализа. Обновите план.',
+                        'code': 'revision_conflict'}), 409
+    return jsonify({**result, 'explanation': narration['text'],
+                    'llm': narration['llm'], 'ai': narration['ai']})
 
 
-def _sandbox_text(f: dict) -> str:
-    """Интерпретация JSON-факта песочницы (цифры — из движка, не отсюда)."""
-    if f["shift"] > 0:
-        head = f"Ты сдвинул «{f['task']}» на {_days_ru(f['shift'])}."
-    elif f["shift"] < 0:
-        head = f"Ты вернул «{f['task']}» на {_days_ru(-f['shift'])} назад."
-    else:
-        head = f"«{f['task']}» вернулась на исходную позицию."
-    lines = [head]
-    if f["affected"]:
-        lines.append("Сдвинутся последующие задачи: " + ", ".join(f"«{n}»" for n in f["affected"]) + ".")
-    if f["now_at_risk"]:
-        lines.append("Новые задачи под угрозой: " + ", ".join(f"«{n}»" for n in f["now_at_risk"]) + ".")
-    if f["duration_delta"] > 0:
-        lines.append(f"Общий срок проекта сдвинется на {_days_ru(f['duration_delta'])}.")
-    elif f["duration_delta"] < 0:
-        lines.append(f"Общий срок проекта сократится на {_days_ru(-f['duration_delta'])}.")
-    else:
-        lines.append("Общий срок проекта не изменится — сдвиг закрылся резервом.")
-    if f["deadline_breached"]:
-        lines.append(f"⚠ Дедлайн нарушен на {_days_ru(f['delay_vs_deadline'])}.")
-    lines.append(f"Риск срыва сдачи проекта — {f['risk']}.")
-    return "\n".join(lines)
-
-
-def _days_ru(n: int) -> str:
-    return ai_features._days(n)
+@app.post('/api/projects/<pid>/sandbox/apply')
+def apply_sandbox(pid: str):
+    body = read_body('shifts', 'base_revision', 'scenario_key')
+    if not body.get('base_revision') or not body.get('scenario_key'):
+        return jsonify({'error': 'Сначала рассчитайте сценарий.'}), 400
+    text_value(body['scenario_key'], 'Сценарий', 128, empty=False)
+    with _lock:
+        db = load_db()
+        project = db['projects'].get(pid)
+        if not project:
+            return jsonify({'error': 'Проект не найден'}), 404
+        if body['base_revision'] != sandbox.revision(project):
+            return jsonify({'error': 'Проект изменился. Сценарий не сохранён. Обновите план.',
+                            'code': 'revision_conflict'}), 409
+        try:
+            result = sandbox.calculate(project, body.get('shifts'))
+        except ValueError as error:
+            return jsonify({'error': str(error)}), 400
+        if body['scenario_key'] != result['scenario_key'] or not result['shifts']:
+            return jsonify({'error': 'Сценарий изменился. Сначала рассчитайте его заново.'}), 409
+        updated = {**project, 'tasks': simulate(project['tasks'],
+                   {key: {'start_delay': value} for key, value in result['shifts'].items()})}
+        db['projects'][pid] = updated
+        save_db(db)
+    return jsonify({**project_payload(updated), 'applied': True, 'diff': result['diff']})
 
 
 @app.post("/api/projects/<pid>/checklist")
 def checklist_endpoint(pid: str):
     """Генерация чек-листа подзадач для (новой или существующей) сложной задачи."""
-    body = request.get_json(force=True) or {}
-    name = str(body.get("name", "")).strip()
-    duration = max(0, int(body.get("duration", 5)))
-    owner = str(body.get("owner", ""))
-    deps = [str(d) for d in body.get("dependencies", [])]
+    body = read_body(*TASK_FIELDS, 'task_id')
+    name = text_value(body.get('name', ''), 'Название задачи')
+    duration = days(body.get("duration", 5), "Длительность")
+    owner = text_value(body.get('owner', ''), 'Ответственный', 120)
+    deps = dependencies(body.get('dependencies', []))
     task_id = body.get("task_id")
+    if 'task_id' in body:
+        text_value(task_id, 'Задача', 128, empty=False)
+    if 'id' in body:
+        text_value(body['id'], 'Идентификатор задачи', 128, empty=False)
+    if 'start_delay' in body:
+        days(body['start_delay'], 'Ожидание')
+    if 'status' in body and (not isinstance(body['status'], str) or body['status'] not in VALID_STATUS):
+        raise ValueError('Неизвестный статус задачи.')
     with _lock:
         project = load_db()["projects"].get(pid)
     if not project:
         return jsonify({"error": "Проект не найден"}), 404
+    if any(dep not in {t['id'] for t in project['tasks']} for dep in deps):
+        raise ValueError('Одна из задач в зависимостях не найдена.')
     if task_id:
         t = next((x for x in project["tasks"] if x["id"] == task_id), None)
         if not t:
@@ -480,7 +617,7 @@ def checklist_endpoint(pid: str):
         sug['subtasks'] = [{'name': title, 'duration': total // count + (i < total % count),
             'owner': owner, 'dependencies': deps if i == 0 else []} for i, title in enumerate(names)]
         sug['checklist_total_duration'] = total
-        sug['note'] = 'Черновик DeepSeek: названия предложены ИИ; дни распределены Python. Проверьте перед применением.'
+        sug['note'] = 'Проверьте предложенные подзадачи и их длительность перед добавлением.'
     return jsonify({"suggestion": sug, "text": ai_features.checklist_text(sug),
                     "llm": narration['llm'], "ai": narration['ai']})
 
@@ -488,15 +625,20 @@ def checklist_endpoint(pid: str):
 @app.post("/api/projects/<pid>/apply-checklist")
 def apply_checklist_endpoint(pid: str):
     """Кнопка «Согласен»: подзадачи добавляются в проект одной операцией."""
-    body = request.get_json(force=True) or {}
-    subs = body.get("subtasks", [])
-    if not isinstance(subs, list) or not subs:
+    body = read_body('subtasks', 'base_revision')
+    subs = list_value(body.get('subtasks', []), 'Подзадачи')
+    if not subs:
         return jsonify({"error": "Нет подзадач для добавления"}), 400
+    for sub in subs:
+        object_value(sub, 'Подзадача', TASK_FIELDS)
     with _lock:
         db = load_db()
         project = db["projects"].get(pid)
         if not project:
             return jsonify({"error": "Проект не найден"}), 404
+        conflict = check_revision(body, project)
+        if conflict:
+            return conflict
         new_tasks = project["tasks"] + [dict(s) for s in subs]
         project["tasks"] = norm_tasks(new_tasks)
         payload = project_payload(project)
@@ -513,7 +655,7 @@ def explain_endpoint(pid: str, task_id: str):
         project = load_db()["projects"].get(pid)
     if not project:
         return jsonify({"error": "Проект не найден"}), 404
-    analysis = analyze(project["tasks"], project.get("deadline"))
+    analysis = analyze_project(project)
     if not any(t['id'] == task_id for t in analysis['tasks']):
         return jsonify({'error': 'Задача не найдена'}), 404
     text = ai_features.explain_task_simple(task_id, analysis)
@@ -530,7 +672,7 @@ def report_md_endpoint(pid: str):
         project = load_db()["projects"].get(pid)
     if not project:
         return jsonify({"error": "Проект не найден"}), 404
-    analysis = analyze(project["tasks"], project.get("deadline"))
+    analysis = analyze_project(project)
     base_text = assistant.report(project, analysis)
     narration = ai_service.generate(project_facts(project, analysis, 'report'),
         'Сформируй краткий отчёт для руководства.', base_text)

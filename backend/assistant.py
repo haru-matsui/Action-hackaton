@@ -17,6 +17,7 @@ import re
 import urllib.request
 
 import ai_features
+from planning_calendar import date_label
 from ai_service import SYSTEM_PROMPT, call_llm, llm_available  # noqa: F401 — реэкспорт
 
 
@@ -35,33 +36,71 @@ def explain_change(before: dict, after: dict, diff: dict, changed_task_name: str
                    subject_label: str | None = None) -> str:
     subject = subject_label or f"задаче «{changed_task_name}»"
     lines = [f"Изменение по {subject} проанализировано."]
+    labels = {'name': 'Название', 'duration': 'Оценка, раб. дн.', 'start_delay': 'Ожидание, раб. дн.',
+              'status': 'Статус', 'owner': 'Ответственный', 'dependencies': 'Предшественники',
+              'early_start': 'Начало, рабочий день', 'early_finish': 'Окончание, рабочий день',
+              'slack': 'Резерв, раб. дн.', 'planned_start_date': 'Начало оставшейся работы',
+              'planned_finish_date': 'Завершение по плану'}
+    dated = after.get('calendar', {}).get('configured')
+    if dated:
+        labels.pop('early_start'); labels.pop('early_finish')
+    statuses = {'todo': 'к выполнению', 'in_progress': 'в работе', 'done': 'выполнено'}
+    def shown(field, value, analysis):
+        if value is None:
+            return '—'
+        if field == 'dependencies':
+            return ', '.join(_tname(analysis, tid) for tid in value) or 'нет'
+        if field == 'status':
+            return statuses.get(value, value)
+        if field in ('planned_start_date', 'planned_finish_date'):
+            return date_label(value)
+        return str(value) if value != '' else 'не назначен'
+    for item in diff.get('edited_tasks', [])[:6]:
+        parts = []
+        for field, change in {**item['changes'], **item['schedule_changes']}.items():
+            if field in labels:
+                parts.append(f"{labels[field]}: {shown(field, change['before'], before)} → {shown(field, change['after'], after)}")
+        lines.append(f"• «{item['name']}»: " + '; '.join(parts) + '.')
+    if any('owner' in t['changes'] for t in diff.get('edited_tasks', [])):
+        lines.append('Смена ответственного сама по себе не сокращает оценку: навыки и доступность не заданы.')
     dd = diff["duration_delta"]
-    if dd > 0:
+    if dated:
+        finish = after['summary'].get('forecast_finish_date')
+        lines.append(f"• Прогноз завершения: {date_label(finish)}. Осталось {diff['new_duration']} раб. дн."
+                     if finish else '• Незавершённых задач нет. Фактическая дата завершения не записана.')
+        if before['summary'].get('forecast_finish_date') and dd:
+            lines.append(f"Ранее прогноз: {date_label(before['summary']['forecast_finish_date'])}; изменение {dd:+d} раб. дн.")
+    elif dd > 0:
         lines.append(f"• Общий срок проекта увеличился с {diff['old_duration']} до "
                      f"{diff['new_duration']} рабочих дней (+{dd} дн.).")
     elif dd < 0:
         lines.append(f"• Общий срок проекта сократился на {-dd} дн. — теперь "
                      f"{diff['new_duration']} дн. Это хорошая новость.")
     else:
-        lines.append("• Общий срок проекта не изменился — изменение попало в резерв.")
+        lines.append(f"• Прогноз завершения не изменился: {diff['new_duration']} рабочих дней.")
 
-    affected = [a for a in diff["affected_tasks"] if a.get("shift_days")
+    affected = [a for a in diff.get('consequences', diff['affected_tasks']) if a.get("shift_days")
                 and ("downstream" not in diff or a['id'] in diff['downstream'])]
     if affected:
         names = ", ".join(f"«{a['name']}» ({a['shift_days']:+d} дн.)" for a in affected[:6])
         lines.append(f"• Сдвинулись последующие задачи: {names}.")
     newly_crit = [a for a in diff["affected_tasks"] if a.get("criticality") == "now_critical"]
     if newly_crit:
-        lines.append("• Задачи стали критическими (потеряли резерв): "
+        lines.append("• Задачи стали критическими (определяют прогноз завершения): "
                      + ", ".join(f"«{a['name']}»" for a in newly_crit) + ".")
     if diff["deadline_newly_breached"]:
         s = after["summary"]
-        lines.append(f"⚠ ВНИМАНИЕ: проект вышел за дедлайн ({s['project_deadline']} дн.), "
-                     f"просрочка {s['delay_vs_deadline']} дн. Требуется вмешательство руководителя.")
+        deadline = date_label(s['deadline_date']) if dated else f"{s['project_deadline']} дн."
+        lines.append(f"⚠ Прогноз превышает дедлайн ({deadline}), "
+                     f"превышение по прогнозу {s['delay_vs_deadline']} дн. Требуется вмешательство руководителя.")
     elif diff["deadline_breached"]:
         s = after["summary"]
         lines.append(f"Проект по-прежнему превышает дедлайн на {s['delay_vs_deadline']} дн.")
-    if not diff["requires_action"]:
+    if after['summary'].get('status_conflicts'):
+        lines.append('Статусы задач противоречат зависимостям. Проверьте их: прогноз по этим связям условный.')
+    if diff.get('existing_issues_remain'):
+        lines.append('Ранее выявленные проблемы сохраняются и требуют внимания.')
+    elif not diff["requires_action"]:
         lines.append("Дополнительное вмешательство из-за этого изменения не требуется.")
     lines.append("Рекомендации: " + _recommend(after, diff))
     return "\n".join(lines)
@@ -71,10 +110,12 @@ def _recommend(after: dict, diff: dict | None = None) -> str:
     recs = []
     s = after["summary"]
     cp = s["critical_path"]
+    if s.get('status_conflicts'):
+        recs.append('проверьте противоречивые статусы и зависимости перед принятием решений по прогнозу;')
     if s["deadline_breached"]:
         over = s["delay_vs_deadline"]
-        recs.append(f"сократить критический путь минимум на {over} дн.: разбить самую "
-                    "длинную задачу пути на параллельные подзадачи или добавить ресурс;")
+        recs.append(f"для соблюдения дедлайна прогноз нужно сократить на {over} дн.; проверьте "
+                    "возможность сократить объём или выполнить часть работ параллельно, затем пересчитайте план;")
         recs.append("как альтернатива — согласовать с заказчиком сдвиг дедлайна;")
     if cp:
         last = _tname(after, cp[-1])
@@ -85,7 +126,7 @@ def _recommend(after: dict, diff: dict | None = None) -> str:
                     + ", ".join(f"«{_tname(after, r)}»" for r in risk[:4]) + ";")
     owners = {}
     for t in after["tasks"]:
-        if t.get("status") != "done" and t.get("is_critical"):
+        if t.get("status") != "done" and t.get("is_critical") and t.get('owner'):
             owners.setdefault(t.get("owner", "—"), []).append(t["name"])
     overload = {o: ts for o, ts in owners.items() if len(ts) >= 2}
     if overload:
@@ -103,38 +144,36 @@ def report(project: dict, analysis: dict) -> str:
     done = [t for t in tasks if t["status"] == "done"]
     active = [t for t in tasks if t["status"] == "in_progress"]
     todo = [t for t in tasks if t["status"] == "todo"]
-    total_dur = sum(int(t.get("duration", 0)) for t in tasks)
-    done_dur = sum(int(t.get("duration", 0)) for t in done)
-    pct = round(100 * done_dur / total_dur) if total_dur else 0
-    status = "ПОД УГРОЗОЙ" if s["deadline_breached"] else ("требует внимания" if s["at_risk"] else "в норме")
+    from schedule import progress_summary
+    progress = s.get('progress', progress_summary(tasks))
+    pct = progress['completion_percent_by_task_count']
+    signals = ai_features.radar(analysis)
+    status = 'под угрозой' if s['deadline_breached'] else 'требует внимания' if signals else 'в норме'
     lines = [
         f"ОТЧЁТ ПО ПРОЕКТУ «{project['name']}» — статус: {status}",
-        f"• Прогноз длительности: {s['project_duration']} раб. дн."
-        + (f", дедлайн: {s['project_deadline']} дн." if s["project_deadline"] else ""),
-        f"• Готовность по трудоёмкости: {pct}%.",
-        f"• Выполнено: {len(done)} из {len(tasks)} задач"
-        + (f"; в работе: {len(active)}; к выполнению: {len(todo)}." if tasks else "."),
-        "• Критический путь: " + (" → ".join(_tname(analysis, c) for c in s["critical_path"]) or "—"),
-        "• Завершённые задачи: " + (", ".join(t['name'] for t in done) or "нет"),
-        "• Незавершённые задачи: " + (", ".join(t['name'] for t in tasks if t['status'] != 'done') or "нет"),
+        f"• Прогноз завершения: через {s['project_duration']} раб. дн. от точки планирования."
+        + (f" Дедлайн — рабочий день {s['project_deadline']} от той же точки." if s['project_deadline'] is not None else ' Дедлайн не задан.'),
+        f"• Выполнено задач: {len(done)} из {len(tasks)} ({pct}%).",
+        f"• В работе: {len(active)}; к выполнению: {len(todo)}.",
+        ('• Критические задачи всех веток: ' if s.get('critical_branching') else '• Критический путь: ')
+        + ((', ' if s.get('critical_branching') else ' → ').join(_tname(analysis, c) for c in
+           (s['critical_tasks'] if s.get('critical_branching') else s['critical_path'])) or '—'),
+        '• Завершённые задачи: ' + (', '.join(t['name'] for t in done) or 'нет'),
+        '• Незавершённые задачи: ' + (', '.join(t['name'] for t in tasks if t['status'] != 'done') or 'нет'),
     ]
-    if s["deadline_breached"]:
-        lines.append(f"⚠ ПРОСРОЧКА ДЕДЛАЙНА: прогноз {s['project_duration']} дн. против "
-                     f"{s['project_deadline']} дн. (+{s['delay_vs_deadline']} дн.) — требуется вмешательство.")
-    if s["at_risk"]:
-        lines.append("• Под угрозой (на критическом пути, запас проекта мал): "
-                     + ", ".join(f"«{_tname(analysis, r)}»" for r in s["at_risk"]))
-    problems = []
-    if s["deadline_breached"]:
-        problems.append(f"просрочка дедлайна на {s['delay_vs_deadline']} дн.")
-    for t in tasks:
-        if t["status"] == "in_progress" and t["slack"] <= 0:
-            problems.append(f"задача «{t['name']}» в работе, но без резерва времени")
-    lines.append("• Главные проблемы: " + ("; ".join(problems) if problems else "критичных проблем нет.")
-                 )
-    need = "ДА, требуется внимание руководителя." if (s["deadline_breached"] or problems or s['at_risk']) \
-        else "Нет — команда справляется по плану."
-    lines.append(f"• Вывод: {need}")
+    if analysis.get('calendar', {}).get('configured'):
+        lines[1] = (f"• Прогноз завершения: {date_label(s['forecast_finish_date'])}. Осталось {s['project_duration']} раб. дн."
+                    if s.get('forecast_finish_date') else '• Незавершённых задач нет. Фактическая дата завершения не записана.')
+        lines[1] += f" Дедлайн — {date_label(s['deadline_date'])}." if s.get('deadline_date') else ' Дедлайн не задан.'
+        lines.insert(1, f"• По состоянию на {date_label(analysis['calendar']['today'])}.")
+    if s['deadline_breached']:
+        lines.append(f"• Превышение дедлайна по прогнозу: {s['delay_vs_deadline']} раб. дн.")
+    if s.get('status_conflicts'):
+        lines.append('• Статусы противоречат зависимостям. Прогноз условный до проверки этих данных.')
+    lines.append('• Главные проблемы: ' + ('; '.join(signal['message'] for signal in signals[:3])
+                                         if signals else 'явных рисков по имеющимся данным не обнаружено.'))
+    lines.append('• Вывод: ' + ('требуется внимание руководителя.' if signals
+                               else 'по имеющимся данным вмешательство не требуется.'))
     return "\n".join(lines)
 
 
@@ -165,17 +204,26 @@ def _what_if_query(message: str) -> str:
     head = re.sub(WHAT_IF_RE, "", head).strip(" ,:?—-.")
     return head or message
 
-# Скрытый what-if: вопрос без «что если», но с явным гипотетическим сценарием
-# («Иванов уйдёт в отпуск…», «задача X задержится на неделю…»)
+# Only explicit task scenarios are supported. Absence is not a scheduling model.
+ABSENCE_RE = re.compile(r'отпуск|увол|забол|больничн|недоступ|уедет|выгор', re.IGNORECASE)
 HYPOTHETICAL_RE = re.compile(
-    r"(уйдёт|уйдет|уходит|возьмёт|возьмет|уедет|в\s+отпуске|забол|больничн|"
-    r"сгорит|выгор|недоступен|увол|задержится|сорвётся|сорвется|сдвинется|"
-    r"удлинится|затянется|выполним|закроем|готово)",
+    r'(задержится|сорвётся|сорвется|сдвинется|удлинится|затянется|выполним|закроем|готово|раньше|позже|ускор|сократ)',
     re.IGNORECASE,
 )
+
+
+def unsupported_absence():
+    return ('Этот сценарий не поддерживается. Можно проверить изменение срока конкретной задачи.',
+            {'type': 'unsupported_scenario', 'saved': False})
+
+
 _NUM_WORD = {
-    "один": 1, "одну": 1, "две": 2, "двумя": 2, "три": 3, "четыре": 4, "пять": 5,
-    "шесть": 6, "семь": 7, "месяц": 20, "два": 2, "десять": 10,
+    'ноль': 0, 'один': 1, 'одна': 1, 'одну': 1, 'два': 2, 'две': 2,
+    'три': 3, 'четыре': 4, 'пять': 5, 'шесть': 6, 'семь': 7, 'восемь': 8,
+    'девять': 9, 'десять': 10, 'одиннадцать': 11, 'двенадцать': 12,
+    'тринадцать': 13, 'четырнадцать': 14, 'пятнадцать': 15,
+    'шестнадцать': 16, 'семнадцать': 17, 'восемнадцать': 18,
+    'девятнадцать': 19, 'двадцать': 20,
 }
 
 
@@ -193,113 +241,113 @@ def _find_task(tasks: list[dict], text: str) -> dict | None:
     return best
 
 
-def _tasks_of_owner(tasks: list[dict], owner_words: list[str]) -> list[dict]:
-    ow = " ".join(owner_words).lower()
-    return [t for t in tasks if t.get("owner") and (
-        all(w in t["owner"].lower() for w in owner_words) or ow in t["owner"].lower())]
+def _scenario_task(tasks, text):
+    """Only choose an unambiguous task; nested names prefer the full match."""
+    matches = []
+    for task in tasks:
+        name = task['name'].casefold().strip()
+        for found in re.finditer(r'(?<!\w)' + re.escape(name) + r'(?!\w)', text):
+            matches.append((task, found.span()))
+    matches = [(task, span) for task, span in matches if not any(
+        other[0] <= span[0] and other[1] >= span[1] and other != span
+        for _, other in matches)]
+    ids = {task['id'] for task, _ in matches}
+    if len(ids) == 1:
+        target = matches[0][0]
+        for _, (start, end) in sorted(matches, key=lambda item: item[1], reverse=True):
+            text = text[:start] + ' ' * (end-start) + text[end:]
+        return target, text
+    if matches:
+        return None, text
+    # A partial name is accepted only if every significant word is present.
+    words = set(re.findall(r'\w+', text))
+    candidates = [task for task in tasks if (parts := [w for w in re.findall(
+        r'\w+', task['name'].casefold()) if len(w) >= 4]) and all(w in words for w in parts)]
+    if len(candidates) == 1:
+        target = candidates[0]
+        for word in re.findall(r'\w+', target['name'].casefold()):
+            text = re.sub(r'\b' + re.escape(word) + r'\b', ' ', text)
+        return target, text
+    return None, text
 
 
-OWNER_RE = re.compile(
-    r"(?:если\s+)?([А-ЯЁ][а-яё]+(?:\s+[А-ЯЁ][а-яё]+){0,2})\s+"
-    r"(?:уйдёт|уйдет|уходит|возьмёт|возьмет|сгорит|забол|недоступен|в отпуске|уедет|уедет в отпуск)")
+def _extract_days(text: str) -> int | None:
+    """One explicit nonnegative quantity; a week is five working days."""
+    if re.search(r'[+−-]\s*\d', text):
+        return None
+    numbers = '|'.join(sorted(_NUM_WORD, key=len, reverse=True))
+    pattern = (r'(?<![\w.,+−-])(?P<number>\d+|' + numbers + r')\s+'
+               r'(?:(?:рабочих|рабочие|рабочий)\s+)?'
+               r'(?P<unit>дней|день|дня|дн\.?|недели|недель|неделю|неделя)(?!\w)')
+    matches = list(re.finditer(pattern, text))
+    if len(matches) == 1:
+        found = matches[0]
+        rest = text[:found.start()] + text[found.end():]
+        # Do not silently ignore a second number, range, or compound word-number.
+        if re.search(r'\d|\b(?:' + numbers + r')\b|тридцат|сорок|десят|сот|тысяч|миллион|полтора|половин', rest):
+            return None
+        value = found['number']
+        value = int(value) if value.isdigit() else _NUM_WORD[value]
+        return value * (5 if found['unit'].startswith('недел') else 1)
+    if not matches and re.search(r'\bна\s+(?:неделю|день)\b', text):
+        if len(re.findall(r'\b(?:дней|день|дня|неделю|недели|недель)\b', text)) != 1:
+            return None
+        if re.search(r'\d|\b(?:' + numbers + r')\b', text):
+            return None
+        return 5 if re.search(r'\bна\s+неделю\b', text) else 1
+    return None
 
 
-def _extract_days(text: str) -> int:
-    m = re.search(r"(\d+)\s*(?:дн|день|дня|дней|days?)", text, re.IGNORECASE)
-    if m:
-        return int(m.group(1))
-    tl = text.lower()
-    if "недел" in tl:
-        n = 1
-        m2 = re.search(r"(одна|один|одну|две|двумя|три|четыре|пять)\s+\w*недел", tl)
-        if m2:
-            n = {"одна": 1, "один": 1, "одну": 1, "две": 2, "двумя": 2,
-                 "три": 3, "четыре": 4, "пять": 5}[m2.group(1)]
-        elif re.search(r"\b(\d+)\s*\w*недел", tl):
-            n = int(re.search(r"\b(\d+)\s*\w*недел", tl).group(1))
-        return n * 5
-    for w, v in _NUM_WORD.items():
-        if re.search(rf"\b{w}\b", tl):
-            return v
-    return 5  # по умолчанию — неделя
+def clarify_scenario(message):
+    return message, {'type': 'insufficient_data', 'saved': False}
 
 
 def answer_what_if(question: str, project: dict, analysis: dict) -> tuple[str, dict]:
     """Разбор вопроса «что если…», симуляция на данных системы, ответ."""
-    from schedule import analyze as run_analyze, simulate, downstream_of, diff_analysis
+    from schedule import simulate, downstream_of, diff_analysis
+    from planning_calendar import analyze_project
 
     q = _what_if_query(question).strip().rstrip("!.")
     ql = q.lower()
     tasks = project["tasks"]
     before = analysis
 
-    # --- Сценарий: сотрудник уходит в отпуск / на больничный ---------------
-    vacation_words = ("отпуск", "увол", "забол", "больничн", "недоступ", "уедет", "выгор")
-    if any(w in ql for w in vacation_words):
-        om = OWNER_RE.search(q)
-        owned = _tasks_of_owner(tasks, om.group(1).split()) if om else []
-        if not owned:
-            owned_t = _find_task(tasks, ql)
-            owned = [owned_t] if owned_t else []
-        owned = [t for t in owned if t.get("status") != "done"]
-        if not owned:
-            who = om.group(1) if om else "этот сотрудник"
-            return (f"Данных недостаточно: не удалось найти незавершённые задачи сотрудника «{who}». "
-                    "Уточните имя из проекта. Последствия отпуска не рассчитаны.",
-                    {'type': 'insufficient_data'})
-        changes = {t["id"]: {"remove_owner": True} for t in owned}
-        sim_tasks = simulate(tasks, changes)
-        try:
-            after = run_analyze(sim_tasks, project.get("deadline"))
-        except ValueError:
-            return ("После такого изменения в графике возникает цикл зависимостей — "
-                    "проверьте связи задачи.", {})
-        diff = diff_analysis(before, after)
-        names = ", ".join(f"«{t['name']}»" for t in owned)
-        who = om.group(1) if om else owned[0].get("owner", "ответственный")
-        assumption = ('Условная модель отсутствия: длительность каждой незавершённой задачи '
-                      'сотрудника увеличивается на 50%, с округлением добавки вверх. '
-                      'Даты отпуска и возможность замены неизвестны. Это допущение, не факт.')
-        head = f"СИМУЛЯЦИЯ БЕЗ СОХРАНЕНИЯ: {who}, задачи: {names}. {assumption}"
-        body = explain_change(before, after, diff, who, subject_label=f"персоне «{who}»")
-        extra = ""
-        others = sorted({t["owner"] for t in tasks
-                         if t["owner"] and t["owner"] != owned[0].get("owner")})
-        if others:
-            extra = ("\nВариант решения: переназначить часть задач на "
-                     + ", ".join(others[:4]) + ". Сначала проверьте навыки и доступность; эффект переназначения не рассчитан.")
-        payload = {"question": question, "simulation": changes, "diff": diff,
-                   "affected_owner_tasks": [t["id"] for t in owned],
-                   "assumptions": [assumption], "after": after, "saved": False}
-        return f"{head}\n{body}{extra}", payload
+    if ABSENCE_RE.search(q):
+        return unsupported_absence()
 
-    # --- Сценарии по конкретной задаче --------------------------------------
-    target = _find_task(tasks, ql)
+    target, action = _scenario_task(tasks, ql)
     if not target:
-        return ("Я не смог определить задачу, о которой идёт речь. Уточните название задачи "
-                "из списка проекта — и я смоделирую последствия.", {})
-
-    changes: dict[str, dict] = {}
-    desc = ""
-    if "сдвин" in ql or "задерж" in ql or "сорв" in ql or "позже" in ql or "больше" in ql or "дольше" in ql or "сложнее" in ql or "передел" in ql or "неделя" in ql or "недели" in ql or "дней" in ql or "день" in ql:
-        days = _extract_days(ql)
-        changes[target["id"]] = {"duration": days}
-        desc = f"срок задачи сдвинется на {days} дн."
-    elif "быстрее" in ql or "раньше" in ql or "успе" in ql or "сокр" in ql or "меньше" in ql:
-        days = _extract_days(ql)
-        changes[target["id"]] = {"duration": -days}
-        desc = f"задача завершится на {days} дн. раньше"
-    elif "завершим" in ql or "сделаем" in ql or "закроем" in ql or "готова" in ql:
-        changes[target["id"]] = {"set_done": True}
-        desc = "задача будет выполнена досрочно"
+        return clarify_scenario('Укажите полное название одной задачи и изменение её срока, например: «Тестирование завершится на 3 дня раньше».')
+    if target.get('status') == 'done':
+        return clarify_scenario('Эта задача уже выполнена. Для проверки изменения срока выберите незавершённую задачу.')
+    if re.search(r'\b(?:не|или|либо|от|до|около|примерно)\b', action):
+        return clarify_scenario('Уточните один вариант: какая задача завершится раньше или позже и на сколько рабочих дней.')
+    later = bool(re.search(r'задерж|позже|дольше|увелич|удлин|затян|больше', action))
+    earlier = bool(re.search(r'раньше|быстрее|сократ|сокр[а-яё]*|ускор|меньше', action))
+    complete = bool(re.search(r'завершим|закроем|сделаем|выполним|готова|будет выполнена', action))
+    if later and earlier:
+        return clarify_scenario('В вопросе указаны и ускорение, и задержка. Уточните одно изменение срока задачи.')
+    if earlier or later:
+        days = _extract_days(action)
+        if days is None or not 0 <= days <= 100000:
+            return clarify_scenario('Укажите точную величину изменения: целое число рабочих дней или недель, например «Разработка задержится на 3 дня».')
+        delta = -days if earlier else days
+        duration = int(target['duration'])
+        if not 0 <= duration + delta <= 100000:
+            return clarify_scenario(f'Длительность задачи сейчас {duration} дн. Укажите изменение, после которого она останется в пределах от 0 до 100000 дней.')
+        if delta == 0:
+            return 'Изменение на 0 дней сохраняет текущий план. Сценарий не сохранён.', {'type':'unchanged', 'saved':False}
+        changes = {target['id']: {'duration': delta}}
+        desc = f"длительность {'уменьшится' if earlier else 'увеличится'} на {days} дн."
+    elif complete and not re.search(r'\d|дн|день|недел', action):
+        changes = {target['id']: {'set_done': True}}
+        desc = 'задача будет отмечена выполненной'
     else:
-        days = _extract_days(ql)
-        changes[target["id"]] = {"duration": days}
-        desc = f"задержка составит {days} дн."
+        return clarify_scenario('Уточните действие: задача завершится раньше или позже, и на сколько рабочих дней. Можно также проверить её завершение.')
 
     sim_tasks = simulate(tasks, changes)
     try:
-        after = run_analyze(sim_tasks, project.get("deadline"))
+        after = analyze_project(project, sim_tasks, before.get('calendar', {}).get('today'))
     except ValueError:
         return ("После такого изменения в графике возникает цикл зависимостей — "
                 "проверьте связи задачи.", {})
@@ -318,10 +366,13 @@ def chat(message: str, project: dict, analysis: dict) -> tuple[str, dict]:
     ml = message.lower().strip()
     payload: dict = {}
 
+    if ABSENCE_RE.search(message):
+        return unsupported_absence()
+
     if WHAT_IF_RE.search(message):
         return answer_what_if(message, project, analysis)
 
-    # Скрытый what-if: «Иванов уйдёт в отпуск на неделю», «Тест задержится на 3 дня» —
+    # Скрытый what-if: «Тестирование задержится на 3 дня» —
     # тоже моделируем, а не отвечаем рекомендациями по текущему состоянию.
     if HYPOTHETICAL_RE.search(message):
         return answer_what_if("что будет если " + message, project, analysis)
@@ -366,38 +417,28 @@ def chat(message: str, project: dict, analysis: dict) -> tuple[str, dict]:
         return ("Рекомендации по текущему состоянию:\n" + _recommend(analysis), {"type": "advice"})
 
     if any(w in ml for w in ("критич", "главн", "важн", "приорите")):
-        cp = analysis["summary"]["critical_path"]
+        cp = analysis["summary"].get("critical_tasks", analysis["summary"]["critical_path"])
         if cp:
-            chain = " → ".join(_tname(analysis, c) for c in cp)
-            return (f"Наиболее критичные задачи — это критический путь: {chain}. "
+            chain = ", ".join(_tname(analysis, c) for c in cp)
+            return (f"Критические задачи: {chain}. "
                     "Любая задержка здесь двигает весь проект. Держите их под ежедневным контролем.",
                     {"type": "critical"})
         return "Сейчас нет задач с нулевым резервом — прямых критических угроз нет.", {"type": "critical"}
 
     if any(w in ml for w in ("угроз", "риск", "проблем")):
-        risk = analysis["summary"]["at_risk"]
-        if analysis["summary"]["deadline_breached"]:
-            return ("Главная угроза: прогноз проекта превышает дедлайн на "
-                    f"{analysis['summary']['delay_vs_deadline']} дн. " + _recommend(analysis),
-                    {"type": "risk"})
-        if risk:
-            return ("Задачи под угрозой (на критическом пути при малом запасе проекта): "
-                    + ", ".join(f"«{_tname(analysis, r)}»" for r in risk)
-                    + ". По ним стоит уточнить прогресс уже сегодня.", {"type": "risk"})
-        return "Задач под угрозой нет — у всех незавершённых работ достаточный резерв времени.", {"type": "risk"}
+        signals = ai_features.radar(analysis)
+        return ai_features.radar_text(signals), {'type': 'risk', 'signals': signals}
 
     if any(w in ml for w in ("привет", "здравств", "помощь", "help", "что ты умеешь")):
-        return ("Я ИИ-ассистент руководителя проектов. Я получаю от системы готовые расчёты "
-                "и объясняю их простым языком. Спросите:\n"
+        return ("Помогу оценить риски, последствия изменений и подготовить отчёт. Спросите:\n"
                 "• «Что будет, если задача X задержится на неделю?»\n"
-                "• «Что будет, если Иванов уйдёт в отпуск?»\n"
                 "• «Дай отчёт по проекту»\n"
                 "• «Какие задачи критичны?» / «Что делать?»\n"
                 "Также при каждом изменении задачи я автоматически объясняю последствия.",
                 {"type": "help"})
 
-    return ("Я анализирую последствия изменений в проекте на основе расчётов системы. "
-            "Попробуйте вопрос со слов «что будет если…» или попросите отчёт по проекту.",
+    return ("Могу оценить последствия изменения задачи, показать риски или подготовить отчёт. "
+            "Например, спросите: «Что будет, если задача задержится?»",
             {"type": "fallback"})
 
 

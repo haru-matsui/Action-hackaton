@@ -3,8 +3,8 @@
     "demo-migration": {
       "id": "demo-migration",
       "name": "Запуск CRM-платформы",
-      "description": "Демонстрационный проект: разработка и вывод в продакшн CRM-платформы.",
-      "deadline": 30,
+      "description": "Разработка и запуск CRM-платформы.",
+      "deadline": null,
       "tasks": [
         {
           "id": "analysis",
@@ -107,7 +107,9 @@
             "docs"
           ]
         }
-      ]
+      ],
+      "start_date": "2026-09-22",
+      "deadline_date": "2026-11-03"
     }
   }
 }

@@ -28,12 +28,16 @@ def main():
             ('impact', 'post', '/impact', {'task_id':'backend','changes':{'duration':17},'apply':False}),
             ('checklist', 'post', '/checklist', {'name':'Разработка API','duration':7}),
             ('report', 'get', '/report.md', None),
-            ('missing_data', 'post', '/assistant', {'message':'Какой бюджет проекта? Кто из сотрудников сегодня на больничном?'}),
+            ('missing_data', 'post', '/assistant', {'message':'Какой бюджет проекта и сколько денег уже потрачено?'}),
         ]
         for name, method, path, body in scenarios:
             response = getattr(client, method)(root+path, **({'json':body} if body else {}))
             assert response.status_code == 200, (name,response.status_code)
             data = response.get_json() if response.is_json else None
+            if name == 'impact':
+                response = client.post(root+'/impact/explanation', json={'explanation_id': data['explanation_id']})
+                assert response.status_code == 200
+                data = response.get_json()
             used = data['llm'] if data else response.headers.get('X-AI-Source') == 'llm'
             text = (data.get('explanation') or data.get('reply') or data.get('text')) if data else response.get_data(as_text=True)
             print(json.dumps({'scenario':name,'llm':used,'model':data['ai']['model'] if data else response.headers.get('X-AI-Model'),

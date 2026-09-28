@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import re
+from planning_calendar import date_label
 
 # --------------------------------------------------------------------------- #
 #  Мелкие хелперы над структурой analyze()                                     #
@@ -43,7 +44,7 @@ def _pct(a: float, b: float) -> int:
 # --------------------------------------------------------------------------- #
 
 def workload_by_owner(analysis: dict) -> dict:
-    """Загрузка сотрудников: активные незавершённые задачи на человека."""
+    """Распределение незавершённых задач, без оценки доступности и часов."""
     load: dict[str, dict] = {}
     for t in analysis["tasks"]:
         owner = t.get("owner") or "Без ответственного"
@@ -69,46 +70,48 @@ def radar(analysis: dict) -> list[dict]:
     s = analysis["summary"]
     tm = task_map(analysis)
     signals: list[dict] = []
+    reserve = s.get('deadline_reserve', s['project_deadline'] - s['project_duration'] if s['project_deadline'] is not None else None)
 
-    # --- перегрузка сотрудников -------------------------------------------- #
+    # --- неравномерное распределение задач --------------------------------- #
     load = {owner: value for owner, value in workload_by_owner(analysis).items()
             if owner != 'Без ответственного'}
-    actives = [v["active"] for v in load.values()]
     busiest = max(load.items(), key=lambda kv: kv[1]["active"], default=(None, None))
-    laziest = min(load.items(), key=lambda kv: kv[1]["active"], default=(None, None))
+    fewest = min(load.items(), key=lambda kv: kv[1]["active"], default=(None, None))
     if busiest[0] is not None and len(load) > 1:
-        diff = busiest[1]["active"] - laziest[1]["active"]
+        diff = busiest[1]["active"] - fewest[1]["active"]
         if busiest[1]["active"] >= 3 and diff >= 2:
             risky = [n for n, t in tm.items()
                      if (t.get("owner") or "Без ответственного") == busiest[0] and t["at_risk"]]
-            msg = (f"{busiest[0]} ведёт {busiest[1]['active']} активных задач, "
-                   f"тогда как у {laziest[0]} — {laziest[1]['active']}.")
+            msg = (f"У {busiest[0]} — {busiest[1]['active']} незавершённых задач, "
+                   f"у {fewest[0]} — {fewest[1]['active']}.")
             if risky:
-                msg += " Под угрозой срыва: " + ", ".join(f"«{tm[r]['name']}»" for r in risky) + "."
+                msg += " Среди них задачи с малым резервом: " + ", ".join(f"«{tm[r]['name']}»" for r in risky) + "."
             signals.append({
-                "severity": "high", "type": "overload",
-                "title": "Неравномерная загрузка сотрудников",
+                "severity": "info", "type": "task_distribution",
+                "title": "Неравномерное распределение задач",
                 "message": msg,
                 "suggestion": f"Обсудите перераспределение части задач с {busiest[0]} "
-                              f"на {laziest[0]}; предварительно проверьте навыки и доступность.",
+                              f"на {fewest[0]}; предварительно проверьте навыки и доступность.",
             })
 
     # --- дедлайн ------------------------------------------------------------ #
     if s["deadline_breached"]:
         signals.append({
             "severity": "high", "type": "deadline",
-            "title": "Срыв срока проекта",
-            "message": f"Прогноз {_days(s['project_duration'])} против дедлайна "
-                       f"{_days(s['project_deadline'])} — просрочка {_days(s['delay_vs_deadline'])}.",
-            "suggestion": "Сократите критический путь (разбить/параллелить самую длинную "
-                          "задачу пути) или согласуйте сдвиг дедлайна с заказчиком.",
+            "title": "Прогноз превышает дедлайн",
+            "message": (f"Прогноз завершения — {date_label(s['forecast_finish_date'])}, дедлайн — "
+                       f"{date_label(s['deadline_date'])}. Превышение — {s['delay_vs_deadline']} раб. дн."
+                       if s.get('deadline_date') else f"Прогноз {_days(s['project_duration'])} против дедлайна "
+                       f"{_days(s['project_deadline'])} — превышение {_days(s['delay_vs_deadline'])}."),
+            "suggestion": "Проверьте возможность сократить объём или выполнить часть критических "
+                          "работ параллельно; затем пересчитайте план. Альтернатива — согласовать дедлайн.",
         })
-    elif s["project_deadline"] is not None and 0 <= s["project_deadline"] - s["project_duration"] <= 2:
+    elif any(t['status'] != 'done' for t in analysis['tasks']) and reserve is not None and 0 <= reserve <= 2:
         signals.append({
             "severity": "medium", "type": "tight_deadline",
             "title": "График впритык к дедлайну",
-            "message": f"Запас до дедлайна всего {_days(s['project_deadline'] - s['project_duration'])} — "
-                       "любая задержка на критическом пути сорвёт срок.",
+            "message": f"Запас до дедлайна всего {_days(reserve)} — "
+                       "задержка на критическом пути, превышающая этот запас, нарушит срок.",
             "suggestion": "Держите критический путь под ежедневным контролем; найдите, "
                           "что можно ускорить заранее.",
         })
@@ -118,24 +121,23 @@ def radar(analysis: dict) -> list[dict]:
         t = tm[tid]
         signals.append({
             "severity": "medium", "type": "at_risk",
-            "title": f"Под угрозой: {t['name']}",
+            "title": f"Малый резерв: {t['name']}",
             "message": f"Задача «{t['name']}» на критическом пути, резерв {t['slack']} дн., "
                        f"ответственный — {t.get('owner') or 'не назначен'}.",
-            "suggestion": "Уточните прогресс сегодня; при необходимости усильте ресурсом "
-                          "или снимите часть объёма.",
+            "suggestion": "Уточните оставшуюся оценку и проверьте возможность сократить объём. "
+                          "Переназначение обсуждайте с учётом навыков и доступности.",
         })
 
-    # --- «в работе», но старт уже просрочен --------------------------------- #
-    for t in analysis["tasks"]:
-        if t["status"] == "in_progress":
-            waiting = [tm[d]['name'] for d in t['dependencies'] if d in tm and tm[d]['status'] != 'done']
-            if waiting:
-                signals.append({
-                    "severity": "info", "type": "started_late",
-                    "title": f"Проверьте старт «{t['name']}»",
-                    "message": f"Задача в работе, хотя предшественники не завершены: {', '.join(waiting)}.",
-                    "suggestion": "Уточните фактические статусы и необходимость указанных зависимостей.",
-                })
+    for conflict in s.get('status_conflicts', []):
+        t = tm[conflict['task_id']]
+        waiting = ', '.join(tm[d]['name'] for d in conflict['unfinished_dependencies'])
+        signals.append({
+            'severity': 'medium', 'type': 'status_conflict',
+            'title': f"Проверьте связи «{t['name']}»",
+            'message': f"Задача {'выполнена' if t['status'] == 'done' else 'в работе'}, "
+                       f"но предшественники не завершены: {waiting}. Прогноз требует проверки.",
+            'suggestion': 'Уточните статусы и зависимости. Фактические даты неизвестны.',
+        })
 
     order = {"high": 0, "medium": 1, "info": 2}
     return sorted(signals, key=lambda x: order[x["severity"]])
@@ -143,8 +145,7 @@ def radar(analysis: dict) -> list[dict]:
 
 def radar_text(signals: list[dict], limit: int = 5) -> str:
     if not signals:
-        return ("Радар рисков чист: перегрузки нет, дедлайн в резерве, "
-                "задач под угрозой не обнаружено.")
+        return 'Явных рисков по данным проекта не обнаружено.'
     icon = {"high": "🔴", "medium": "🟠", "info": "🔵"}
     lines = [f"{icon[x['severity']]} {x['title']}. {x['message']} → {x['suggestion']}"
              for x in signals[:limit]]
@@ -204,7 +205,7 @@ def suggest_checklist(name: str, duration: int, dependencies: list[str] | None =
     """Чек-лист подзадач для новой/сложной задачи. Длительности делит система
     пропорционально шаблону (это арифметика планирования, не текст)."""
     deps = list(dependencies or [])
-    dur = max(1, int(duration))
+    dur = max(0, int(duration))
     pattern = None
     for rx, items in TEMPLATES:
         if re.search(rx, name, re.IGNORECASE):
@@ -214,7 +215,7 @@ def suggest_checklist(name: str, duration: int, dependencies: list[str] | None =
         pattern = GENERIC_CHECKLIST
     subs, used = [], 0
     for i, (sub_name, share) in enumerate(pattern):
-        d = max(1, round(dur * share)) if i < len(pattern) - 1 else max(1, dur - used)
+        d = min(dur - used, max(0, round(dur * share))) if i < len(pattern) - 1 else dur - used
         used += d
         subs.append({"name": sub_name, "duration": d, "owner": owner,
                      "dependencies": deps if i == 0 else []})
@@ -222,7 +223,7 @@ def suggest_checklist(name: str, duration: int, dependencies: list[str] | None =
     return {"task_name": name, "original_duration": dur, "subtasks": subs,
             "checklist_total_duration": total,
             "note": ("Суммарная длительность подзадач больше исходной оценки — "
-                     "это нормально для декомпозиции, проверьте итог на timeline."
+                     "проверьте суммарную длительность перед добавлением."
                      if total > dur else "Декомпозиция сохраняет общий срок задачи.")}
 
 
@@ -246,44 +247,44 @@ def explain_task_simple(task_id: str, analysis: dict) -> str:
     if not t:
         return ("Данных по этой задаче нет — не могу ответить. "
                 "Выберите задачу из списка проекта.")
-    parts = [f"«{t['name']}»: {t['duration']} дн., ответственный — "
-             f"{t.get('owner') or 'не назначен'}, статус — {t['status']}."]
+    status = {'todo': 'к выполнению', 'in_progress': 'в работе', 'done': 'выполнена'}[t['status']]
+    remaining = t.get('remaining_duration', 0 if t['status'] == 'done' else t['duration'])
+    parts = [f"«{t['name']}»: осталось {remaining} раб. дн., ответственный — "
+             f"{t.get('owner') or 'не назначен'}, статус — {status}."]
 
     waiting_on = [tm[d] for d in t["dependencies"] if d in tm and tm[d]["status"] != "done"]
     if waiting_on:
-        chain = ", ".join(
-            f"«{w['name']}»" + (f" (ждёт: {', '.join(tm[p]['name'] for p in w['dependencies'] if p in tm)},"
-                                f" ответственный {w.get('owner') or '—'})" if w["dependencies"] else "")
-            for w in waiting_on)
-        parts.append(f"Ты не можешь начать «{t['name']}», пока не закончатся: {chain}.")
+        chain = ', '.join(f"«{w['name']}»" for w in waiting_on)
+        if t['status'] == 'todo':
+            parts.append(f"По плану начало зависит от завершения: {chain}.")
+        else:
+            parts.append(f"Есть противоречие: задача {status}, но предшественники не завершены: {chain}. "
+                         'Проверьте статусы и зависимости; прогноз по этим связям условный.')
+    elif t['status'] == 'done':
+        parts.append('Задача выполнена и не добавляет оставшейся работы. Фактическая дата завершения не задана.')
+    elif t['status'] == 'in_progress':
+        parts.append('Задача уже в работе. В прогнозе используется оставшаяся оценка.')
     else:
-        parts.append("Все предшественники выполнены — задача может идти прямо сейчас.")
+        parts.append('Незавершённых предшественников нет.' if t['dependencies'] else 'Предшественники не заданы.')
+        if t.get('start_delay', 0):
+            parts.append(f"Перед началом запланировано ожидание {t['start_delay']} раб. дн.")
 
     blockers = [x for x in analysis["tasks"]
                 if task_id in x["dependencies"] and x["status"] != "done"]
     if blockers:
-        parts.append("Из-за неё стоят: " + ", ".join(f"«{b['name']}»" for b in blockers) + ".")
-    parts.append(("Задача на КРИТИЧЕСКОМ пути (резерв " + str(t["slack"]) +
-                  " дн.): любой её день просрочки двигает весь проект.")
-                 if t["is_critical"] else
-                 ("Резерв " + str(t["slack"]) + " дн.: небольшая задержка не тронет срок проекта.")
-                 )
+        parts.append('От задачи зависят: ' + ', '.join(f"«{b['name']}»" for b in blockers) + '.')
+    if t['status'] != 'done':
+        if t.get('planned_start_date'):
+            parts.append(f"Оставшаяся работа по плану: {date_label(t['planned_start_date'])} — {date_label(t['planned_finish_date'])}.")
+        parts.append(f"Резерв по текущему плану: {t['slack']} раб. дн.")
+        if t['is_critical']:
+            parts.append('Задача на критическом пути: увеличение оставшегося срока сдвигает прогноз завершения проекта.')
     return "\n".join(parts)
 
 
 # --------------------------------------------------------------------------- #
 #  4. Песочница: сухой JSON-факт для мгновенной реакции панели ИИ              #
 # --------------------------------------------------------------------------- #
-
-def risk_level(deadline_breached: bool, delay: int, slack_left: int) -> str:
-    if deadline_breached:
-        return "высокий"
-    if delay > 0 or slack_left <= 0:
-        return "средний"
-    if slack_left <= 2:
-        return "умеренный"
-    return "низкий"
-
 
 def sandbox_json(before: dict, after: dict, diff: dict, moved_task_id: str,
                  shift_days: int) -> dict:
@@ -294,23 +295,29 @@ def sandbox_json(before: dict, after: dict, diff: dict, moved_task_id: str,
     blocked = [a["name"] for a in diff["affected_tasks"] if a.get("shift_days") and a['id'] != moved_task_id]
     s = after["summary"]
     slack_left = ((s["project_deadline"] - s["project_duration"])
-                  if s["project_deadline"] is not None else 999)
+                  if s["project_deadline"] is not None else None)
+    slack_left = s.get('deadline_reserve', slack_left)
     return {
         "task_id": moved_task_id,
         "task": bt.get("name", moved_task_id),
         "owner": at.get("owner") or bt.get("owner") or "",
-        "shift": int(shift_days),
+        "shift": at.get('early_start', 0) - bt.get('early_start', 0),
+        "start_shift_days": at.get('early_start', 0) - bt.get('early_start', 0),
+        "wait_change_days": int(shift_days),
         "new_finish": at.get("early_finish"),
         "old_start": bt.get('early_start'), "new_start": at.get('early_start'),
+        "old_start_date": bt.get('planned_start_date'), "new_start_date": at.get('planned_start_date'),
+        "old_finish_date": bt.get('planned_finish_date'), "new_finish_date": at.get('planned_finish_date'),
         "old_finish": bt.get('early_finish'), "task_duration": at.get('duration'),
         "new_start_delay": at.get('start_delay', 0),
         "affected": blocked,
         "now_at_risk": [task_map(after)[i]["name"] for i in diff["new_at_risk"]
                         if i in task_map(after)],
         "duration_delta": diff["duration_delta"],
-        "deadline_shift": max(0, diff["duration_delta"]),
+        "deadline_shift": 0,
         "deadline_breached": s["deadline_breached"],
         "delay_vs_deadline": s["delay_vs_deadline"],
         "slack_left": slack_left,
-        "risk": risk_level(s["deadline_breached"], s["delay_vs_deadline"], slack_left),
+        "risk": s['risk_assessment']['level'],
+        "risk_basis": s['risk_assessment']['basis'],
     }

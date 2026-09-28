@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), '..', 'backend')))
 import app as pm_app
+from test_support import seed_legacy_demo
 
 
 class ApiFlowTest(unittest.TestCase):
@@ -17,6 +18,7 @@ class ApiFlowTest(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         pm_app.DATA_DIR = self.temp.name
         pm_app.DB_FILE = os.path.join(self.temp.name, 'db.json')
+        seed_legacy_demo(pm_app)
         self.client = pm_app.app.test_client()
 
     def tearDown(self):

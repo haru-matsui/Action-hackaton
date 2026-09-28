@@ -12,6 +12,7 @@ from urllib.error import HTTPError, URLError
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'backend'))
 import ai_service
 import app as pm
+from test_support import seed_legacy_demo
 import assistant
 from schedule import analyze, simulate, diff_analysis
 
@@ -52,6 +53,17 @@ class AdapterTests(unittest.TestCase):
         self.assertFalse(result['llm'])
         self.assertEqual(result['text'], 'Нет данных')
         self.assertEqual(result['ai']['reason'], 'invalid_response')
+
+    def test_calendar_dates_may_be_formatted_but_not_invented(self):
+        facts = {'today':'2026-09-25','finish':'2026-10-28','duration':24}
+        for text, accepted in [('Прогноз — 28.10.2026. Осталось 24 дня.',True),
+                               ('Прогноз — 2026-10-28.',True),
+                               ('Прогноз — 25.10.2026.',False),
+                               ('Прогноз — 31.02.2026.',False),
+                               ('Прогноз — 28.10.2026, осталось 999 дней.',False)]:
+            with self.subTest(text=text), patch('urllib.request.urlopen',return_value=completion({'text':text})):
+                ai_service._cache.clear()
+                self.assertEqual(ai_service.generate(facts,'Объясни','Факты')['llm'],accepted)
 
     def test_provider_failures_are_visible_without_secrets(self):
         for code, reason in [(401,'unauthorized'),(402,'credits'),(429,'rate_limit'),(503,'unavailable')]:
@@ -102,6 +114,7 @@ class ScenarioTests(unittest.TestCase):
         self.settings.start(); self.addCleanup(self.settings.stop)
         self.no_network = patch.dict(os.environ, {'PM_RADAR_AI_DISABLED':'1'})
         self.no_network.start(); self.addCleanup(self.no_network.stop)
+        seed_legacy_demo(pm)
         self.client = pm.app.test_client()
         self.base = '/api/projects/demo-migration'
         self.client.get(self.base)
@@ -152,7 +165,6 @@ class ScenarioTests(unittest.TestCase):
         routes = [('get','/radar',None),('get','/explain/backend',None),('get','/report.md',None),
             ('post','/assistant',{'message':'Какие задачи уже выполнены?'}),
             ('post','/sandbox',{'task_id':'backend','shift_days':3}),
-            ('post','/impact',{'task_id':'backend','changes':{'duration':17},'apply':False}),
             ('post','/simulate',{'changes':{'backend':{'duration':3}}})]
         before = self.db()
         for method,path,body in routes:
@@ -182,17 +194,20 @@ class ScenarioTests(unittest.TestCase):
         self.assertEqual(self.client.post(self.base+'/apply-checklist',json={'subtasks':subs}).status_code,200)
         self.assertEqual(len(self.client.get(self.base).get_json()['project']['tasks']),13)
 
-    def test_unknown_person_is_not_declared_safe(self):
-        p=pm.demo_project()
-        text,facts=assistant.answer_what_if('Что будет если Василий Пупкин уйдёт в отпуск?',p,analyze(p['tasks'],p['deadline']))
-        self.assertEqual(facts['type'],'insufficient_data')
-        self.assertIn('не рассчитаны',text)
-
-    def test_vacation_assumption_is_explicit(self):
-        p=pm.demo_project()
-        text,facts=assistant.answer_what_if('Что будет если Олег Кузнецов уйдёт в отпуск?',p,analyze(p['tasks'],p['deadline']))
-        self.assertIn('50%',facts['assumptions'][0])
-        self.assertIn('after',facts)
-        self.assertFalse(facts['saved'])
+    def test_absence_scenario_is_removed_and_never_calls_model_or_changes_data(self):
+        before = self.db()
+        questions = ['Что будет если Олег Кузнецов уйдёт в отпуск?',
+                     'Что будет если Василий Пупкин уйдёт в отпуск?',
+                     'Тестирование: сотрудник в отпуске на 3 дня']
+        for question in questions:
+            with patch.object(ai_service,'generate') as model:
+                response = self.client.post(self.base+'/assistant',json={'message':question})
+                self.assertEqual(response.status_code,200)
+                data = response.get_json()
+                self.assertEqual(data['facts']['type'],'unsupported_scenario')
+                self.assertFalse(data['llm'])
+                self.assertNotIn('simulation',data['facts'])
+                model.assert_not_called()
+                self.assertEqual(before,self.db())
 
 if __name__ == '__main__': unittest.main()
